@@ -14,6 +14,7 @@ from PyQt6.QtGui import QPixmap, QImage, QIcon, QFont
 
 from src.config_manager import get_settings
 from src.hpb_scraper import get_salon_name, fetch_latest_style_images, download_images
+from src.gbp_uploader import check_login, login_to_google, manual_login, upload_to_gbp
 
 # ロギング設定
 logger = logging.getLogger(__name__)
@@ -113,6 +114,11 @@ class MainWindow(QMainWindow):
         self.login_button.clicked.connect(self.check_google_login)
         button_layout.addWidget(self.login_button)
         
+        # 手動Googleログインボタン
+        self.manual_login_button = QPushButton("手動Googleログイン")
+        self.manual_login_button.clicked.connect(self.perform_manual_google_login)
+        button_layout.addWidget(self.manual_login_button)
+        
         # 画像取得ボタン
         self.fetch_button = QPushButton("画像を取得")
         self.fetch_button.clicked.connect(self.fetch_images)
@@ -187,8 +193,60 @@ class MainWindow(QMainWindow):
     def check_google_login(self):
         """Googleログイン状態をチェック"""
         self.log_message("Googleログイン状態を確認中...")
-        # ここでPlaywrightを使用したログインチェック機能を実装（後で実装）
-        self.statusBar().showMessage("Googleログイン機能は未実装です")
+        self.login_button.setEnabled(False)
+        self.statusBar().showMessage("Googleログイン状態を確認中...")
+        
+        # Googleログイン状態をチェックするワーカーを作成
+        worker = Worker(check_login)
+        worker.signals.result.connect(self.on_login_check_result)
+        worker.signals.error.connect(self.on_worker_error)
+        worker.signals.finished.connect(lambda: self.login_button.setEnabled(True))
+        self.threadpool.start(worker)
+    
+    def on_login_check_result(self, is_logged_in):
+        """ログイン状態チェック結果の処理"""
+        if is_logged_in:
+            self.log_message("Googleにログイン済みです")
+            self.statusBar().showMessage("Googleにログイン済み")
+            QMessageBox.information(self, "ログイン状態", "Googleにログイン済みです。画像投稿が可能です。")
+        else:
+            self.log_message("Googleにログインが必要です")
+            self.statusBar().showMessage("Googleにログインが必要です")
+            reply = QMessageBox.question(
+                self, 'ログイン', 'Googleにログインが必要です。ログインを実行しますか？',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.perform_google_login()
+    
+    def perform_google_login(self):
+        """Google ログインを実行"""
+        self.log_message("Googleログインプロセスを開始します")
+        self.login_button.setEnabled(False)
+        self.statusBar().showMessage("Googleログイン中...")
+        
+        def progress_callback(message):
+            self.log_message(message)
+        
+        # Googleログインを実行するワーカーを作成
+        worker = Worker(login_to_google, progress_callback)
+        worker.signals.result.connect(self.on_login_result)
+        worker.signals.error.connect(self.on_worker_error)
+        worker.signals.finished.connect(lambda: self.login_button.setEnabled(True))
+        self.threadpool.start(worker)
+    
+    def on_login_result(self, login_success):
+        """ログイン結果の処理"""
+        if login_success:
+            self.log_message("Googleログインが完了しました")
+            self.statusBar().showMessage("Googleログイン完了")
+            QMessageBox.information(self, "ログイン完了", "Googleログインが完了しました。画像投稿が可能です。")
+        else:
+            self.log_message("Googleログインに失敗しました")
+            self.statusBar().showMessage("Googleログイン失敗")
+            QMessageBox.warning(self, "ログイン失敗", "Googleログインに失敗しました。もう一度試すか、手動でログインしてください。")
     
     def fetch_images(self):
         """HPBからスタイル画像を取得"""
@@ -341,8 +399,51 @@ class MainWindow(QMainWindow):
         self.log_message(f"{len(selected_paths)}件の画像を投稿準備中...")
         self.log_message(f"GBP URL: {gbp_url}")
         
-        # ここでPlaywrightを使用したGBP投稿機能を実装（後で実装）
-        self.statusBar().showMessage("GBP投稿機能は未実装です")
+        # ログイン状態を確認
+        worker = Worker(check_login)
+        worker.signals.result.connect(lambda is_logged_in: self.proceed_with_upload(is_logged_in, gbp_url, selected_paths))
+        worker.signals.error.connect(self.on_worker_error)
+        self.threadpool.start(worker)
+    
+    def proceed_with_upload(self, is_logged_in, gbp_url, selected_paths):
+        """ログイン状態に応じてアップロードを続行するかログインを促す"""
+        if not is_logged_in:
+            reply = QMessageBox.question(
+                self, 'ログイン必要', 'Googleにログインが必要です。ログインを実行しますか？',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.perform_google_login()
+            return
+        
+        # アップロード実行
+        self.upload_button.setEnabled(False)
+        self.statusBar().showMessage("GBPに画像をアップロード中...")
+        self.progress_bar.setValue(0)
+        
+        def progress_callback(message):
+            self.log_message(message)
+            
+        # GBP投稿ワーカーを作成
+        worker = Worker(upload_to_gbp, gbp_url, selected_paths, progress_callback)
+        worker.signals.result.connect(self.on_upload_result)
+        worker.signals.error.connect(self.on_worker_error)
+        worker.signals.finished.connect(lambda: self.upload_button.setEnabled(True))
+        self.threadpool.start(worker)
+    
+    def on_upload_result(self, upload_success):
+        """アップロード結果の処理"""
+        if upload_success:
+            self.log_message("画像の投稿が完了しました")
+            self.statusBar().showMessage("画像投稿完了")
+            self.progress_bar.setValue(100)
+            QMessageBox.information(self, "投稿完了", "画像の投稿が完了しました。")
+        else:
+            self.log_message("画像の投稿に失敗しました")
+            self.statusBar().showMessage("画像投稿失敗")
+            QMessageBox.warning(self, "投稿失敗", "画像の投稿に失敗しました。ログイン状態とGBP URLを確認してください。")
     
     def on_worker_error(self, error_msg):
         """ワーカースレッドでエラーが発生した場合の処理"""
@@ -350,6 +451,33 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("エラーが発生しました")
         self.fetch_button.setEnabled(True)
         
+    def perform_manual_google_login(self):
+        """Google手動ログインを実行"""
+        self.log_message("Google手動ログインプロセスを開始します")
+        self.manual_login_button.setEnabled(False)
+        self.statusBar().showMessage("Google手動ログイン中...")
+        
+        def progress_callback(message):
+            self.log_message(message)
+        
+        # Google手動ログインを実行するワーカーを作成
+        worker = Worker(manual_login, progress_callback)
+        worker.signals.result.connect(self.on_manual_login_result)
+        worker.signals.error.connect(self.on_worker_error)
+        worker.signals.finished.connect(lambda: self.manual_login_button.setEnabled(True))
+        self.threadpool.start(worker)
+    
+    def on_manual_login_result(self, login_success):
+        """手動ログイン結果の処理"""
+        if login_success:
+            self.log_message("Google手動ログインが完了しました")
+            self.statusBar().showMessage("Google手動ログイン完了")
+            QMessageBox.information(self, "ログイン完了", "Google手動ログインが完了しました。画像投稿が可能です。")
+        else:
+            self.log_message("Google手動ログインに失敗しました")
+            self.statusBar().showMessage("Google手動ログイン失敗")
+            QMessageBox.warning(self, "ログイン失敗", "Google手動ログインに失敗しました。もう一度試すか、別の方法でログインしてください。")
+    
     def closeEvent(self, event):
         """アプリケーションが閉じられる際の処理"""
         reply = QMessageBox.question(
