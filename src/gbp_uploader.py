@@ -129,23 +129,35 @@ class GoogleAuthManager:
     def __init__(self, context: BrowserContext):
         self.context = context
     
-    async def is_logged_in(self) -> bool:
-        """Googleにログインしているかチェック"""
+    async def is_logged_in(self, page: Optional[Page] = None) -> bool:
+        """Googleにログインしているかチェック (既存Pageオブジェクト利用可)"""
         logger.info("ログイン状態を確認中...")
+        check_page = page # 渡されたページを使う
+        should_close_page = False
         
         try:
-            page = await self.context.new_page()
-            await page.goto("https://accounts.google.com/signin/v2/identifier")
+            if check_page is None:
+                # ページが渡されなかった場合（独立したチェックなど）は新規作成
+                logger.debug("is_logged_in: 新規ページを作成してチェックします")
+                check_page = await self.context.new_page()
+                should_close_page = True
+            else:
+                logger.debug("is_logged_in: 既存のページを使用してチェックします")
+
+            # ログイン確認ページに移動（または現在のURLを確認）
+            # すでにGoogleドメインにいるかもしれないので、現在地を確認
+            current_url = check_page.url
+            if "accounts.google.com" not in current_url:
+                 logger.debug(f"is_logged_in: accounts.google.com へ移動します (現在地: {current_url})")
+                 await check_page.goto("https://accounts.google.com/signin/v2/identifier", wait_until='networkidle')
+                 current_url = check_page.url # 移動後のURLを再取得
             
-            # リダイレクト後のURLをチェック
-            current_url = page.url
-            logger.debug(f"現在のURL: {current_url}")
+            logger.debug(f"ログインチェック中のURL: {current_url}")
             
-            # ログイン済みの場合は myaccount.google.com などに
-            # リダイレクトされている可能性がある
-            is_logged_in = "myaccount.google.com" in current_url or "accounts.google.com/o/oauth2" in current_url
-            
-            await page.close()
+            # ログイン済みの判定 (バックスラッシュによる行継続を修正)
+            is_logged_in = ("myaccount.google.com" in current_url or 
+                           "accounts.google.com/ManageAccount" in current_url or 
+                           "accounts.google.com/ServiceLogin" not in current_url)
             
             if is_logged_in:
                 logger.info("Googleにログイン済みです")
@@ -157,7 +169,12 @@ class GoogleAuthManager:
         except Exception as e:
             logger.error(f"ログイン状態の確認中にエラーが発生しました: {e}", exc_info=True)
             return False
-    
+        finally:
+            # このメソッド内で新規作成したページのみ閉じる
+            if should_close_page and check_page and not check_page.is_closed():
+                logger.debug("is_logged_in: 新規作成したチェック用ページを閉じます")
+                await check_page.close()
+
     async def login(self, progress_callback=None) -> bool:
         """Google アカウントにログイン（マニュアル）"""
         logger.info("Google ログインページを開きます")
@@ -451,267 +468,177 @@ class GBPUploader:
         self.context = context
         self.gbp_selectors = get_gbp_selectors()
         self.settings = get_settings()
-        self.upload_wait_seconds = self.settings.get('upload_wait_seconds', 5)
+        self.upload_wait_seconds = self.settings.get('upload_wait_seconds', 10)
+        self.default_timeout = 60000 # 60秒
     
-    async def upload_images(self, gbp_url: str, image_paths: List[str], progress_callback=None) -> bool:
-        """GBPに画像をアップロード"""
-        logger.info(f"GBP投稿画面にアクセス中: {gbp_url}")
+    async def _save_error_page(self, page: Page, filename_base: str = "error"):
+        """エラー発生時のページ状態を保存するヘルパー関数"""
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            screenshot_path = f"{filename_base}_screenshot_{timestamp}.png"
+            html_path = f"{filename_base}_page_{timestamp}.html"
+            await page.screenshot(path=screenshot_path)
+            logger.info(f"エラー状態のスクリーンショットを保存しました: {screenshot_path}")
+            html_content = await page.content()
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            logger.info(f"エラー状態のHTMLを保存しました: {html_path}")
+        except Exception as save_error:
+            logger.error(f"エラーページの保存中にエラー: {save_error}")
+
+    async def upload_images(self, gbp_url: str, image_paths: List[str], page: Optional[Page] = None, progress_callback=None) -> bool:
+        """GBPに画像をアップロード (既存Pageオブジェクト利用可)"""
         
-        if progress_callback:
-            progress_callback("GBP投稿画面にアクセス中...")
+        upload_page = page # 渡されたページを使う
+        should_create_page = False
+        
+        if upload_page is None:
+            logger.warning("upload_images: Pageオブジェクトが渡されませんでした。新規作成します。")
+            should_create_page = True
+            # このケースは今回の修正フローでは発生しない想定だが、フォールバックとして残す
+        
+        logger.info(f"GBP投稿画面処理を開始 (Page: {'新規' if should_create_page else '既存'})")
         
         try:
-            page = await self.context.new_page()
-            await page.goto(gbp_url)
+            if should_create_page:
+                upload_page = await self.context.new_page()
+            
+            # --- page.goto は呼び出し元 (またはこのメソッドの開始部分) で実行済みとする --- 
+            # logger.debug(f"ページを開きました。URLへ移動: {gbp_url}")
+            # await upload_page.goto(gbp_url, timeout=self.default_timeout, wait_until='networkidle')
+            # logger.debug("ページ移動完了 (networkidle)。")
+            
+            # --- ページがすでにGBP URLにいる前提で処理を開始 --- 
+            logger.debug(f"現在のページ ({upload_page.url}) でアップロード処理を開始します")
+            
+            # ページロード完了を待機 (goto直後でないため少し短くても良いかも)
+            await asyncio.sleep(3) 
             
             # 写真追加ボタンが表示されるまで待機
             add_photo_selector = self.gbp_selectors.get('add_photo_button')
             logger.debug(f"写真追加ボタンのセレクタ: {add_photo_selector}")
             
             try:
-                await page.wait_for_selector(add_photo_selector, timeout=10000)
+                logger.debug(f"写真追加ボタンが表示されるのを待機中... Timeout={self.default_timeout}ms")
+                await upload_page.wait_for_selector(add_photo_selector, timeout=self.default_timeout, state='visible')
                 logger.info("写真追加ボタンが見つかりました")
             except TimeoutError:
                 logger.warning("写真追加ボタンが見つかりません。ページ構造が変更された可能性があります")
-                await page.screenshot(path="error_screenshot.png")
-                logger.info("エラー状態のスクリーンショットを保存しました: error_screenshot.png")
-                await page.close()
-                return False
+                await self._save_error_page(upload_page, "error_add_button")
+                # ページを閉じるのは呼び出し元or finallyで行うためここでは return False のみ
+                return False 
             
-            # 写真追加ボタンをクリック
-            await page.click(add_photo_selector)
+            # ... (以降の要素検索、クリック、ファイル設定、待機処理は upload_page を使う) ...
+            await asyncio.sleep(2)
+            logger.debug(f"写真追加ボタンをクリックします: {add_photo_selector}")
+            await upload_page.click(add_photo_selector)
             logger.info("写真追加ボタンをクリックしました")
             
             if progress_callback:
                 progress_callback("写真アップロードダイアログを準備中...")
             
-            # アップロードモーダルが表示されるまで待機
             upload_modal_selector = self.gbp_selectors.get('upload_modal')
-            await page.wait_for_selector(upload_modal_selector, timeout=10000)
+            logger.debug(f"アップロードモーダルが表示されるのを待機中... セレクタ: {upload_modal_selector}, Timeout={self.default_timeout}ms")
+            await upload_page.wait_for_selector(upload_modal_selector, timeout=self.default_timeout, state='visible')
+            logger.info("アップロードモーダルが表示されました")
             
-            # ファイル入力要素が表示されるまで待機
             file_input_selector = self.gbp_selectors.get('file_input')
-            await page.wait_for_selector(file_input_selector, timeout=10000)
+            logger.debug(f"ファイル入力要素が表示されるのを待機中... セレクタ: {file_input_selector}, Timeout={self.default_timeout}ms")
+            await upload_page.wait_for_selector(file_input_selector, timeout=self.default_timeout, state='visible')
+            logger.info("ファイル入力要素が表示されました")
             
-            # ファイルをアップロード
-            element = await page.query_selector(file_input_selector)
+            element = await upload_page.query_selector(file_input_selector)
             if element:
                 logger.info(f"{len(image_paths)}枚の画像をアップロード中...")
-                
                 if progress_callback:
                     progress_callback(f"{len(image_paths)}枚の画像をアップロード中...")
-                
-                # 画像ファイルのパスリストをPlaywrightのsetInputFiles関数に渡す
+                await asyncio.sleep(3)
+                logger.debug(f"ファイル入力要素に画像を設定: {image_paths}")
                 await element.set_input_files(image_paths)
                 logger.info("画像ファイルを選択しました")
-                
-                # 「投稿」ボタンが有効になるまで待機
+                upload_wait = self.upload_wait_seconds + 5
+                logger.debug(f"画像選択後 {upload_wait} 秒待機します...")
+                await asyncio.sleep(upload_wait)
                 post_button_selector = self.gbp_selectors.get('post_button')
-                await page.wait_for_selector(post_button_selector, timeout=30000)
-                
-                # 少し待機（画像のプレビューが表示されるまで）
-                await asyncio.sleep(self.upload_wait_seconds)
-                
+                post_button_timeout = self.default_timeout * 2
+                logger.debug(f"投稿ボタンが表示/有効になるのを待機中... セレクタ: {post_button_selector}, Timeout={post_button_timeout}ms")
+                await upload_page.wait_for_selector(post_button_selector, timeout=post_button_timeout, state='visible')
+                logger.info("投稿ボタンが見つかりました")
+                await asyncio.sleep(5)
                 if progress_callback:
                     progress_callback("写真を投稿中...")
-                
-                # 「投稿」ボタンをクリック
-                await page.click(post_button_selector)
+                logger.debug(f"投稿ボタンをクリックします: {post_button_selector}")
+                await upload_page.click(post_button_selector)
                 logger.info("投稿ボタンをクリックしました")
-                
-                # 投稿完了を待機（適切な完了セレクタがない場合は一定時間待機）
-                await asyncio.sleep(5)
-                
-                logger.info("画像の投稿が完了しました")
-                await page.close()
+                post_complete_wait = self.upload_wait_seconds + 10
+                logger.debug(f"投稿処理完了を {post_complete_wait} 秒待機します...")
+                await asyncio.sleep(post_complete_wait)
+                logger.info("画像の投稿プロセスが完了したと見なします")
+                # ページはここでは閉じない
                 return True
             else:
                 logger.error("ファイル入力要素が見つかりません")
-                await page.close()
+                await self._save_error_page(upload_page, "error_file_input")
                 return False
             
         except Exception as e:
-            logger.error(f"画像アップロード中にエラーが発生しました: {e}", exc_info=True)
-            try:
-                await page.screenshot(path="error_screenshot.png")
-                logger.info("エラー状態のスクリーンショットを保存しました: error_screenshot.png")
-                await page.close()
-            except:
-                pass
+            logger.error(f"画像アップロード中に予期せぬエラーが発生しました: {e}", exc_info=True)
+            if upload_page and not upload_page.is_closed():
+                 await self._save_error_page(upload_page, "error_unexpected")
             return False
+        finally:
+            # このメソッド内で新規作成した場合のみページを閉じる
+            if should_create_page and upload_page and not upload_page.is_closed():
+                logger.debug("upload_images: 新規作成したアップロード用ページを閉じます")
+                await upload_page.close()
 
 
-async def check_google_login_status() -> bool:
-    """Googleログイン状態をチェック"""
-    pw_manager = PlaywrightManager()
+async def check_google_login_status(context: BrowserContext) -> bool:
+    """Googleログイン状態をチェック (Contextを受け取る)"""
     try:
-        context = await pw_manager.start()
         auth_manager = GoogleAuthManager(context)
         is_logged_in = await auth_manager.is_logged_in()
-        await pw_manager.close()
         return is_logged_in
     except Exception as e:
         logger.error(f"ログイン状態チェック中にエラーが発生しました: {e}", exc_info=True)
-        await pw_manager.close()
         return False
 
 
-async def perform_google_login(progress_callback=None, browser_type='firefox') -> bool:
-    """Googleアカウントにログイン"""
-    logger.info("Googleログインページを開きます...")
-    
-    pw_manager = PlaywrightManager(browser_type=browser_type)
+async def perform_google_login(context: BrowserContext, storage_state_path: str, progress_callback=None) -> bool:
+    """Googleアカウントにログイン (Contextを受け取る)"""
+    logger.info("Googleログイン処理を開始します (Context使用)...")
+    login_success = False
     try:
-        context = await pw_manager.start()
         auth_manager = GoogleAuthManager(context)
         
-        # すでにログインしているか確認
         is_logged_in = await auth_manager.is_logged_in()
         if is_logged_in:
             logger.info("すでにログインしています")
             if progress_callback:
                 progress_callback("すでにログインしています")
-            await pw_manager.close()
-            return True
+            login_success = True
+        else:
+            login_success = await auth_manager.login(progress_callback)
+            if login_success:
+                pass
         
-        # ログイン実行
-        login_success = await auth_manager.login(progress_callback)
-        if login_success:
-            await pw_manager.save_storage_state()
-        
-        await pw_manager.close()
         return login_success
     except Exception as e:
         logger.error(f"ログイン処理中にエラーが発生しました: {e}", exc_info=True)
-        await pw_manager.close()
         return False
 
 
-async def upload_images_to_gbp(gbp_url: str, image_paths: List[str], progress_callback=None) -> bool:
-    """GBPに画像をアップロード"""
-    pw_manager = PlaywrightManager()
+async def perform_manual_login(context: BrowserContext, progress_callback=None) -> bool:
+    """手動Googleログイン処理を実行 (Contextを受け取る)"""
+    logger.info("手動Googleログイン処理を開始します (Context使用)...")
+    login_success = False
     try:
-        context = await pw_manager.start()
-        
-        # ログイン状態を確認
         auth_manager = GoogleAuthManager(context)
-        is_logged_in = await auth_manager.is_logged_in()
-        
-        if not is_logged_in:
-            logger.warning("ログインしていないため、アップロードを中止します")
-            await pw_manager.close()
-            return False
-        
-        # 画像アップロード実行
-        uploader = GBPUploader(context)
-        upload_success = await uploader.upload_images(gbp_url, image_paths, progress_callback)
-        
-        # 成功した場合はstorage_stateを保存（Cookieの更新）
-        if upload_success:
-            await pw_manager.save_storage_state()
-        
-        await pw_manager.close()
-        return upload_success
-    except Exception as e:
-        logger.error(f"GBPアップロード処理中にエラーが発生しました: {e}", exc_info=True)
-        await pw_manager.close()
-        return False
-
-
-async def perform_manual_login(progress_callback=None) -> bool:
-    """手動Googleログイン処理を実行"""
-    logger.info("手動Googleログインを開始します...")
-    
-    # ブラウザはヘッドレスモードをオフにして起動する必要がある
-    pw_manager = PlaywrightManager(browser_type='chromium')
-    try:
-        # ヘッドレスモードを強制的にオフにする
-        pw_manager.headless = False
-        
-        # 既存のstorage_stateを読み込まないように空のコンテキスト設定を作成
-        playwright = await async_playwright().start()
-        
-        browser_options = {
-            'headless': False,
-            'args': [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-infobars',
-                '--window-size=1920,1080'
-            ]
-        }
-        
-        # ブラウザを起動
-        browser = await playwright.chromium.launch(**browser_options)
-        
-        # 新しいコンテキストを作成（storage_stateを読み込まない）
-        context_options = {
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'viewport': {'width': 1920, 'height': 1080},
-            'screen': {'width': 1920, 'height': 1080},
-            'device_scale_factor': 1.0,
-            'is_mobile': False,
-            'has_touch': False,
-            'locale': 'ja-JP'
-        }
-        
-        context = await browser.new_context(**context_options)
-        
-        # JavaScriptを実行してwebdriverプロパティを削除
-        await context.add_init_script("""
-        () => {
-            // WebDriverの特性を削除
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            
-            // Chrome特有のオートメーション検出特性を削除
-            if (window.chrome) {
-                delete window.chrome.csi;
-                delete window.chrome.runtime;
-            }
-            
-            // ユーザーエージェントに一般的でないプラグインを追加
-            const originalAppendChild = document.head.appendChild.bind(document.head);
-            document.head.appendChild = function(node) {
-                if (node.nodeName === 'SCRIPT' && node.src.includes('recaptcha')) {
-                    return originalAppendChild(node);
-                }
-                return originalAppendChild(node);
-            };
-        }
-        """)
-        
-        auth_manager = GoogleAuthManager(context)
-        
-        # 手動ログイン実行
         login_success = await auth_manager.manual_login(progress_callback)
-        
-        # 成功したらstorage_stateを保存
-        if login_success:
-            logger.info(f"ログイン情報を保存します: {pw_manager.storage_state_path}")
-            if progress_callback:
-                progress_callback(f"ログイン情報を保存します: {pw_manager.storage_state_path}")
-            await context.storage_state(path=pw_manager.storage_state_path)
-        
-        # リソースを閉じる
-        await context.close()
-        await browser.close()
-        await playwright.stop()
         
         return login_success
     except Exception as e:
         logger.error(f"手動ログイン処理中にエラーが発生しました: {e}", exc_info=True)
-        try:
-            if 'context' in locals():
-                await context.close()
-            if 'browser' in locals():
-                await browser.close()
-            if 'playwright' in locals():
-                await playwright.stop()
-        except Exception as close_error:
-            logger.error(f"リソース終了中にエラーが発生: {close_error}")
         return False
 
 
@@ -725,37 +652,173 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 
-# 同期バージョンの関数（GUIから呼び出し用）
+# 同期バージョンの関数（GUIから呼び出し用）- Playwrightライフサイクルを管理
 def check_login() -> bool:
-    """同期バージョンのGoogleログイン状態チェック"""
-    return run_async(check_google_login_status())
+    """同期バージョンのGoogleログイン状態チェック (PWライフサイクル管理)"""
+    pw_manager = PlaywrightManager()
+    try:
+        async def main():
+            context = await pw_manager.start()
+            return await check_google_login_status(context)
+        return run_async(main())
+    finally:
+        async def close_pw():
+            await pw_manager.close()
+        run_async(close_pw())
 
 
 def login_to_google(progress_callback=None) -> bool:
-    """同期バージョンのGoogleログイン実行"""
-    # まずはFirefoxでログインを試行
-    success = run_async(perform_google_login(progress_callback, browser_type='firefox'))
-    
-    # Firefoxでのログインが失敗した場合、Chromiumで試行
-    if not success:
-        if progress_callback:
-            progress_callback("Firefoxでのログインに失敗しました。Chromiumで再試行します...")
-        success = run_async(perform_google_login(progress_callback, browser_type='chromium'))
-    
-    return success
+    """同期バージョンのGoogleログイン実行 (PWライフサイクル管理)"""
+    pw_manager = PlaywrightManager(browser_type='chromium')
+    login_success = False
+    try:
+        async def main():
+            nonlocal login_success
+            context = await pw_manager.start()
+            login_success = await perform_google_login(context, pw_manager.storage_state_path, progress_callback)
+            if login_success:
+                await pw_manager.save_storage_state()
+            return login_success
+        return run_async(main())
+    finally:
+        async def close_pw():
+            await pw_manager.close()
+        run_async(close_pw())
 
 
 def upload_to_gbp(gbp_url: str, image_paths: List[str], progress_callback=None) -> bool:
-    """同期バージョンのGBPアップロード実行"""
-    return run_async(upload_images_to_gbp(gbp_url, image_paths, progress_callback))
+    """同期バージョンのGBPアップロード実行 (単一ページフロー)"""
+    pw_manager = PlaywrightManager()
+    try:
+        # 修正された非同期ロジックを実行
+        return run_async(_async_upload_logic(pw_manager, gbp_url, image_paths, progress_callback))
+    finally:
+        # Playwright Manager を閉じる
+        logger.debug("Upload_to_gbp (sync wrapper): Closing Playwright Manager.")
+        run_async(pw_manager.close())
 
 
 def manual_login(progress_callback=None) -> bool:
-    """同期バージョンの手動Googleログイン実行"""
-    return run_async(perform_manual_login(progress_callback))
+    """同期バージョンの手動Googleログイン実行 (PWライフサイクル管理)"""
+    pw_manager = PlaywrightManager(browser_type='chromium')
+    pw_manager.headless = False
+    login_success = False
+    try:
+        async def main():
+            nonlocal login_success
+            context = await pw_manager.start()
+            login_success = await perform_manual_login(context, progress_callback)
+            if login_success:
+                logger.info(f"手動ログイン成功、ログイン情報を保存: {pw_manager.storage_state_path}")
+                await context.storage_state(path=pw_manager.storage_state_path)
+            return login_success
+        return run_async(main())
+    finally:
+        async def close_pw():
+            await pw_manager.close()
+        run_async(close_pw())
 
 
-# テスト用のメイン処理
+# 新しい非同期ヘルパー関数
+async def _async_upload_logic(pw_manager: PlaywrightManager, gbp_url: str, image_paths: List[str], progress_callback=None) -> bool:
+    """単一ページでログイン確認からアップロードまで行う非同期ロジック (iframe 内外操作修正)"""
+    context = None
+    page = None
+    upload_success = False
+    # セレクタ定義 (本来は config.json 推奨)
+    owner_check_button_selector = 'a[jsname="ndJ4N"]:has-text("このビジネスのオーナーですか？")'
+    iframe_selector = 'iframe[src^="/local/business/setup/create"]' # iframeを特定するセレクタ
+    continue_button_selector = 'button:has-text("続行")' # iframe内の続行ボタン
+
+    try:
+        context = await pw_manager.start()
+        logger.debug("Async upload logic: Context started.")
+        page = await context.new_page()
+        logger.debug("Async upload logic: Page created.")
+
+        # --- 1. ログイン状態を確認 --- 
+        auth_manager = GoogleAuthManager(context)
+        logger.debug("Async upload logic: Checking login status on the created page...")
+        is_logged_in = await auth_manager.is_logged_in(page=page) 
+        if not is_logged_in:
+            logger.warning("ログインしていないため、アップロードを中止します")
+            await page.close()
+            return False
+        
+        # --- 2. GBP URLへ移動 --- 
+        logger.info(f"ログイン確認完了。同じページでGBP URLへ移動します: {gbp_url}")
+        await page.goto(gbp_url, timeout=60000, wait_until='networkidle')
+        logger.debug(f"GBP URLへの移動完了: {page.url}")
+
+        # --- 2.5 オーナー確認ステップ (iframe 内外操作) --- 
+        try:
+            # 2.5.1 iframe 外の「このビジネスのオーナーですか？」ボタンをクリック
+            logger.info("「このビジネスのオーナーですか？」ボタンを検索中 (メインページ)...")
+            await page.wait_for_selector(owner_check_button_selector, timeout=15000, state='visible')
+            logger.info("「このビジネスのオーナーですか？」ボタンを発見、クリックします。")
+            await page.click(owner_check_button_selector)
+            
+            # 2.5.2 iframe の出現を待機
+            logger.info("オーナー確認用 iframe の出現を待機中...")
+            await page.wait_for_selector(iframe_selector, timeout=15000, state='visible')
+            logger.info("オーナー確認用 iframe が表示されました。")
+            frame_locator = page.frame_locator(iframe_selector)
+            logger.debug("iframe の FrameLocator を取得しました。")
+
+            # 2.5.3 iframe 内の「続行」ボタンをクリック
+            logger.info("iframe 内の「続行」ボタンを検索中...")
+            await frame_locator.locator(continue_button_selector).wait_for(state='visible', timeout=30000)
+            logger.info("iframe 内の「続行」ボタンを発見、クリックします。")
+            await frame_locator.locator(continue_button_selector).click()
+            
+            logger.info("オーナー確認ステップ完了。ページ更新/iframe閉鎖を待機します...")
+            await asyncio.sleep(7) # iframeが閉じて元のページに戻るのを少し長めに待つ
+
+        except TimeoutError:
+            # 「オーナーですか」ボタン、iframe、または「続行」ボタンのいずれかが見つからなかった場合
+            logger.info("オーナー確認ステップのいずれかの要素が見つかりませんでした（タイムアウト）。すでに確認済みか、ページ構造が異なる可能性があります。スキップして続行します。")
+        except Exception as owner_check_error:
+            logger.warning(f"オーナー確認ステップで予期せぬエラー: {owner_check_error}", exc_info=True)
+            # await pw_manager._save_error_page(page, "error_owner_check") # 必要なら復活
+
+        # --- 3. アップロード実行 (元のページコンテキストに戻っているはず) --- 
+        logger.debug("オーナー確認後、アップロード処理を開始します (メインページ)")
+        uploader = GBPUploader(context)
+        # upload_images は page=None で呼び出し、内部で page.goto せずに現在のページを使うように修正が必要かもしれない
+        # → いや、_async_upload_logic 内で page を使い続けるので、upload_images に渡す必要はない
+        # GBPUploader.upload_images を修正して、内部で page を作成・goto するのではなく、
+        # _async_upload_logic から渡された page (メインページ) を使うようにするべき。
+        # 現状のGBPUploader.upload_imagesはpage引数を取るが、内部のgotoはコメントアウトされている。
+        # このままで、メインページ上の要素を探しに行くはず。
+        upload_success = await uploader.upload_images(gbp_url, image_paths, page=page, progress_callback=progress_callback)
+        
+        # --- 4. 成功時のみ storage_state を保存 --- 
+        if upload_success:
+            logger.debug("アップロード成功のため、storage_state を保存します")
+            await pw_manager.save_storage_state()
+            
+        return upload_success
+
+    except Exception as e:
+        logger.error(f"非同期アップロードロジック全体でエラー: {e}", exc_info=True)
+        # GBPUploader内でエラーページ保存を試みるが、ここでも念のため
+        if page and not page.is_closed():
+            try:
+                # PlaywrightManagerに移動した方が良い
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                await page.screenshot(path=f"error_async_logic_{timestamp}.png")
+            except:
+                 pass
+        return False
+    finally:
+        # ページがまだ開いていれば閉じる
+        if page and not page.is_closed():
+            logger.debug("Async upload logic: Closing page in finally block.")
+            await page.close()
+        # Contextの終了は呼び出し元 (upload_to_gbp) の finally で行われる
+
+
+# テスト用のメイン処理 (コメントアウト済み)
 if __name__ == "__main__":
     # テスト用の引数処理
     import argparse
