@@ -121,3 +121,5 @@ storage_state.json
 # Temporary files from this project
 temp/
 *.log
+
+storage_state.json*

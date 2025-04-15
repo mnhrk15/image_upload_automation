@@ -628,7 +628,61 @@ async def perform_manual_login(progress_callback=None) -> bool:
         # ヘッドレスモードを強制的にオフにする
         pw_manager.headless = False
         
-        context = await pw_manager.start()
+        # 既存のstorage_stateを読み込まないように空のコンテキスト設定を作成
+        playwright = await async_playwright().start()
+        
+        browser_options = {
+            'headless': False,
+            'args': [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--window-size=1920,1080'
+            ]
+        }
+        
+        # ブラウザを起動
+        browser = await playwright.chromium.launch(**browser_options)
+        
+        # 新しいコンテキストを作成（storage_stateを読み込まない）
+        context_options = {
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'viewport': {'width': 1920, 'height': 1080},
+            'screen': {'width': 1920, 'height': 1080},
+            'device_scale_factor': 1.0,
+            'is_mobile': False,
+            'has_touch': False,
+            'locale': 'ja-JP'
+        }
+        
+        context = await browser.new_context(**context_options)
+        
+        # JavaScriptを実行してwebdriverプロパティを削除
+        await context.add_init_script("""
+        () => {
+            // WebDriverの特性を削除
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            
+            // Chrome特有のオートメーション検出特性を削除
+            if (window.chrome) {
+                delete window.chrome.csi;
+                delete window.chrome.runtime;
+            }
+            
+            // ユーザーエージェントに一般的でないプラグインを追加
+            const originalAppendChild = document.head.appendChild.bind(document.head);
+            document.head.appendChild = function(node) {
+                if (node.nodeName === 'SCRIPT' && node.src.includes('recaptcha')) {
+                    return originalAppendChild(node);
+                }
+                return originalAppendChild(node);
+            };
+        }
+        """)
+        
         auth_manager = GoogleAuthManager(context)
         
         # 手動ログイン実行
@@ -636,16 +690,28 @@ async def perform_manual_login(progress_callback=None) -> bool:
         
         # 成功したらstorage_stateを保存
         if login_success:
-            await pw_manager.save_storage_state()
-            logger.info(f"ログイン情報を保存しました: {pw_manager.storage_state_path}")
+            logger.info(f"ログイン情報を保存します: {pw_manager.storage_state_path}")
             if progress_callback:
-                progress_callback(f"ログイン情報を保存しました: {pw_manager.storage_state_path}")
+                progress_callback(f"ログイン情報を保存します: {pw_manager.storage_state_path}")
+            await context.storage_state(path=pw_manager.storage_state_path)
         
-        await pw_manager.close()
+        # リソースを閉じる
+        await context.close()
+        await browser.close()
+        await playwright.stop()
+        
         return login_success
     except Exception as e:
         logger.error(f"手動ログイン処理中にエラーが発生しました: {e}", exc_info=True)
-        await pw_manager.close()
+        try:
+            if 'context' in locals():
+                await context.close()
+            if 'browser' in locals():
+                await browser.close()
+            if 'playwright' in locals():
+                await playwright.stop()
+        except Exception as close_error:
+            logger.error(f"リソース終了中にエラーが発生: {close_error}")
         return False
 
 
