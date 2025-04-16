@@ -7,10 +7,11 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QLineEdit, QPushButton, QProgressBar,
     QScrollArea, QGridLayout, QCheckBox, QMessageBox,
-    QTextEdit, QGroupBox, QStatusBar, QSizePolicy, QFrame
+    QTextEdit, QGroupBox, QStatusBar, QSizePolicy, QFrame,
+    QApplication, QSpacerItem, QTabWidget, QToolButton, QStyle
 )
-from PyQt6.QtCore import Qt, QSize, QThreadPool, QRunnable, pyqtSignal, QObject, pyqtSlot
-from PyQt6.QtGui import QPixmap, QImage, QIcon, QFont
+from PyQt6.QtCore import Qt, QSize, QThreadPool, QRunnable, pyqtSignal, QObject, pyqtSlot, QMargins
+from PyQt6.QtGui import QPixmap, QImage, QIcon, QFont, QColor, QPalette, QCursor, QGuiApplication, QPainter, QBrush, QPen, QLinearGradient, QGradient
 
 from src.config_manager import get_settings
 from src.hpb_scraper import get_salon_name, fetch_latest_style_images, download_images
@@ -63,6 +64,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # アプリケーションのスタイル設定
+        self.setup_application_style()
+        
         self.threadpool = QThreadPool()
         logger.debug(f"利用可能なスレッド数: {self.threadpool.maxThreadCount()}")
         
@@ -75,26 +79,219 @@ class MainWindow(QMainWindow):
         # シグナルとスロットを接続
         self.update_log_signal.connect(self._append_log_text)
     
+    def setup_application_style(self):
+        """アプリケーション全体のスタイル設定"""
+        # カラーパレット
+        self.palette = {
+            'primary': '#4285F4',       # Google青
+            'primary_dark': '#3367d6',  # Google青の暗い色
+            'secondary': '#34A853',     # Google緑
+            'secondary_dark': '#2e8b46', # Google緑の暗い色
+            'accent': '#EA4335',        # Google赤
+            'neutral': '#FBBC05',       # Google黄
+            'background': '#f5f5f5',    # 背景色（明るいグレー）
+            'card_bg': '#ffffff',       # カード背景色
+            'card_border': '#e0e0e0',   # カード枠線色
+            'text': '#202124',          # テキスト色（ダークグレー）
+            'light_text': '#5f6368',    # 薄いテキスト色
+            'border': '#dadce0',        # ボーダー色
+            'card': '#ffffff',          # カード背景色
+            'disabled': '#bdc1c6',      # 無効状態色
+            'success': '#34A853',       # 成功色
+            'error': '#EA4335',         # エラー色
+            'warning': '#FBBC05'        # 警告色
+        }
+        
+        # デバイスのピクセル比を取得してHiDPI対応
+        pixel_ratio = QGuiApplication.primaryScreen().devicePixelRatio()
+        
+        # 基本フォント設定
+        app_font = QFont("Hiragino Sans", 10)
+        QApplication.setFont(app_font)
+        
+        # ウィンドウスタイル
+        self.setWindowTitle("HotPepper Beauty 画像投稿ツール")
+        self.setMinimumSize(1000, 700)  # ウィンドウサイズを大きく
+        
+        # ステータスバーのスタイル設定
+        status_font = QFont("Hiragino Sans", 9)
+        self.statusBar().setFont(status_font)
+        
+        # グローバルスタイルシート
+        self.setStyleSheet(f"""
+            QMainWindow {{
+                background-color: {self.palette['background']};
+            }}
+            QGroupBox {{
+                font-weight: bold;
+                border: 1px solid {self.palette['border']};
+                border-radius: 8px;
+                margin-top: 1.5ex;
+                padding: 12px;
+                background-color: {self.palette['card']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top center;
+                padding: 0 8px;
+                color: {self.palette['text']};
+                font-size: 13px;
+                background-color: {self.palette['card']};
+            }}
+            QPushButton {{
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                background-color: {self.palette['card']};
+                color: {self.palette['text']};
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #e8eaed;
+            }}
+            QPushButton:pressed {{
+                background-color: #dadce0;
+            }}
+            QPushButton:disabled {{
+                color: {self.palette['disabled']};
+                background-color: #f1f3f4;
+            }}
+            QLineEdit {{
+                border: 1px solid {self.palette['border']};
+                border-radius: 4px;
+                padding: 8px;
+                background-color: white;
+                selection-background-color: {self.palette['primary']};
+                min-height: 20px;
+            }}
+            QLineEdit:focus {{
+                border: 2px solid {self.palette['primary']};
+            }}
+            QLabel {{
+                color: {self.palette['text']};
+            }}
+            QProgressBar {{
+                border: none;
+                border-radius: 4px;
+                text-align: center;
+                background-color: #e0e0e0;
+                min-height: 6px;
+                max-height: 6px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {self.palette['primary']};
+                border-radius: 4px;
+            }}
+            QCheckBox {{
+                spacing: 5px;
+            }}
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+                border-radius: 3px;
+                border: 1px solid {self.palette['border']};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {self.palette['primary']};
+                border: none;
+                image: url(:/qt-project.org/styles/commonstyle/images/check-white.png);
+            }}
+            QScrollArea {{
+                border: 1px solid {self.palette['border']};
+                border-radius: 8px;
+                background-color: white;
+            }}
+            QScrollBar:vertical {{
+                border: none;
+                background-color: #f1f3f4;
+                width: 10px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: #dadce0;
+                border-radius: 5px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: #bdc1c6;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar:horizontal {{
+                border: none;
+                background-color: #f1f3f4;
+                height: 10px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background-color: #dadce0;
+                border-radius: 5px;
+                min-width: 20px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background-color: #bdc1c6;
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+            QTextEdit {{
+                border: 1px solid {self.palette['border']};
+                border-radius: 8px;
+                background-color: white;
+                selection-background-color: {self.palette['primary']};
+                padding: 5px;
+            }}
+            QFrame {{
+                border-radius: 8px;
+            }}
+        """)
+        
+        # アイコンの設定
+        self.icons = {
+            'fetch': self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload),
+            'upload': self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp),
+            'login': self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton),
+            'manual_login': self.style().standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton),
+            'select_all': self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton),
+            'deselect_all': self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton)
+        }
+    
     def init_ui(self):
         """UIの初期化"""
-        self.setWindowTitle("HotPepper Beauty 画像投稿ツール")
-        self.setMinimumSize(800, 600)
-        
         # メインウィジェットとレイアウト
         main_widget = QWidget()
         main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(15, 15, 15, 15)  # 余白を追加
+        main_layout.setSpacing(12)  # ウィジェット間の間隔を設定
         self.setCentralWidget(main_widget)
+        
+        # タイトルラベル
+        title_label = QLabel("HotPepper Beauty スタイル画像 GoogleMap自動投稿ツール")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet(f"""
+            font-size: 18px;
+            font-weight: bold;
+            color: {self.palette['primary']};
+            margin-bottom: 10px;
+        """)
+        main_layout.addWidget(title_label)
         
         # --- URL入力セクション ---
         url_group = QGroupBox("URL設定")
         url_layout = QVBoxLayout(url_group)
+        url_layout.setContentsMargins(15, 15, 15, 15)
+        url_layout.setSpacing(10)
         
         # HPB URL入力
         hpb_layout = QHBoxLayout()
         hpb_label = QLabel("HPB URL:")
+        hpb_label.setMinimumWidth(80)
+        hpb_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.hpb_url_input = QLineEdit()
         self.hpb_url_input.setPlaceholderText("https://beauty.hotpepper.jp/slnH000xxxxxx/")
         self.salon_name_label = QLabel("")
+        self.salon_name_label.setStyleSheet(f"color: {self.palette['secondary']}; font-weight: bold;")
         hpb_layout.addWidget(hpb_label)
         hpb_layout.addWidget(self.hpb_url_input, 1)
         hpb_layout.addWidget(self.salon_name_label)
@@ -103,6 +300,8 @@ class MainWindow(QMainWindow):
         # GBP URL入力
         gbp_layout = QHBoxLayout()
         gbp_label = QLabel("GBP URL:")
+        gbp_label.setMinimumWidth(80)
+        gbp_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.gbp_url_input = QLineEdit()
         self.gbp_url_input.setPlaceholderText("Google投稿画面のURL")
         gbp_layout.addWidget(gbp_label)
@@ -111,52 +310,141 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(url_group)
         
-        # --- 操作ボタンセクション ---
-        button_layout = QHBoxLayout()
+        # --- 上部操作ボタンセクション ---
+        top_button_container = QWidget()
+        top_button_container.setStyleSheet(f"""
+            background-color: transparent;
+            margin: 0;
+            padding: 0;
+        """)
+        top_button_layout = QHBoxLayout(top_button_container)
+        top_button_layout.setContentsMargins(0, 5, 0, 5)
+        top_button_layout.setSpacing(15)
         
-        # Googleログインボタン
-        self.login_button = QPushButton("Googleにログイン/状態確認")
-        self.login_button.clicked.connect(self.check_google_login)
-        button_layout.addWidget(self.login_button)
+        # メイン操作ボタンセクション（左側）
+        main_buttons_widget = QWidget()
+        main_buttons_layout = QHBoxLayout(main_buttons_widget)
+        main_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        main_buttons_layout.setSpacing(12)
         
-        # 手動Googleログインボタン
-        self.manual_login_button = QPushButton("手動Googleログイン")
-        self.manual_login_button.clicked.connect(self.perform_manual_google_login)
-        button_layout.addWidget(self.manual_login_button)
-        
-        # 画像取得ボタン
-        self.fetch_button = QPushButton("画像を取得")
+        # 画像取得ボタン（強調表示）
+        self.fetch_button = QPushButton("  画像を取得")
+        self.fetch_button.setIcon(self.icons['fetch'])
+        self.fetch_button.setIconSize(QSize(18, 18))
+        self.fetch_button.setStyleSheet(f"""
+            background-color: {self.palette['primary']};
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            min-height: 40px;
+            padding: 0 20px;
+            border-radius: 6px;
+            text-align: left;
+        """)
+        self.fetch_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.fetch_button.clicked.connect(self.fetch_images)
-        button_layout.addWidget(self.fetch_button)
+        main_buttons_layout.addWidget(self.fetch_button)
         
-        # 選択した画像を投稿ボタン
-        self.upload_button = QPushButton("選択した画像を投稿")
+        # 選択した画像を投稿ボタン（強調表示）
+        self.upload_button = QPushButton("  選択した画像を投稿")
+        self.upload_button.setIcon(self.icons['upload'])
+        self.upload_button.setIconSize(QSize(18, 18))
+        self.upload_button.setStyleSheet(f"""
+            background-color: {self.palette['secondary']};
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            min-height: 40px;
+            padding: 0 20px;
+            border-radius: 6px;
+            text-align: left;
+        """)
+        self.upload_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.upload_button.clicked.connect(self.upload_selected_images)
         self.upload_button.setEnabled(False)
-        button_layout.addWidget(self.upload_button)
+        main_buttons_layout.addWidget(self.upload_button)
         
-        main_layout.addLayout(button_layout)
+        # ログインボタンセクション（右側）
+        login_buttons_widget = QWidget()
+        login_buttons_layout = QHBoxLayout(login_buttons_widget)
+        login_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        login_buttons_layout.setSpacing(8)
+        
+        # Googleログインボタン
+        self.login_button = QPushButton("  Googleログイン確認")
+        self.login_button.setIcon(self.icons['login'])
+        self.login_button.setIconSize(QSize(16, 16))
+        self.login_button.setStyleSheet(f"""
+            background-color: white;
+            border: 1px solid {self.palette['border']};
+            border-radius: 6px;
+            min-height: 36px;
+            text-align: left;
+        """)
+        self.login_button.clicked.connect(self.check_google_login)
+        login_buttons_layout.addWidget(self.login_button)
+        
+        # 手動Googleログインボタン
+        self.manual_login_button = QPushButton("  手動Googleログイン")
+        self.manual_login_button.setIcon(self.icons['manual_login'])
+        self.manual_login_button.setIconSize(QSize(16, 16))
+        self.manual_login_button.setStyleSheet(f"""
+            background-color: white;
+            border: 1px solid {self.palette['border']};
+            border-radius: 6px;
+            min-height: 36px;
+            text-align: left;
+        """)
+        self.manual_login_button.clicked.connect(self.perform_manual_google_login)
+        login_buttons_layout.addWidget(self.manual_login_button)
+        
+        # レイアウトに追加
+        top_button_layout.addWidget(main_buttons_widget, 2)  # メインボタンを広く
+        top_button_layout.addWidget(login_buttons_widget, 1)  # ログインボタンを狭く
+        
+        main_layout.addWidget(top_button_container)
         
         # --- 画像表示セクション ---
         images_group = QGroupBox("ヘアスタイル画像")
         images_layout = QVBoxLayout(images_group)
-        
-        # スクロール可能な画像グリッドエリア
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_content = QWidget()
-        self.images_grid = QGridLayout(scroll_content)
-        scroll_area.setWidget(scroll_content)
-        images_layout.addWidget(scroll_area)
+        images_layout.setContentsMargins(10, 20, 10, 10)
+        images_layout.setSpacing(10)
         
         # 全選択/全解除ボタン
         select_buttons_layout = QHBoxLayout()
-        self.select_all_button = QPushButton("全て選択")
+        select_buttons_layout.setContentsMargins(5, 0, 5, 10)
+        
+        select_label = QLabel("画像選択:")
+        select_label.setStyleSheet("font-weight: bold;")
+        select_buttons_layout.addWidget(select_label)
+        
+        self.select_all_button = QPushButton("  全て選択")
+        self.select_all_button.setIcon(self.icons['select_all'])
+        self.select_all_button.setIconSize(QSize(16, 16))
+        self.select_all_button.setStyleSheet(f"""
+            max-width: 120px;
+            padding: 5px 8px;
+            background-color: {self.palette['primary']};
+            color: white;
+            border-radius: 4px;
+            text-align: left;
+        """)
         self.select_all_button.clicked.connect(self.select_all_images)
         self.select_all_button.setEnabled(False)
         select_buttons_layout.addWidget(self.select_all_button)
         
-        self.deselect_all_button = QPushButton("全て解除")
+        self.deselect_all_button = QPushButton("  全て解除")
+        self.deselect_all_button.setIcon(self.icons['deselect_all'])
+        self.deselect_all_button.setIconSize(QSize(16, 16))
+        self.deselect_all_button.setStyleSheet(f"""
+            max-width: 120px;
+            padding: 5px 8px;
+            background-color: #f1f3f4;
+            color: {self.palette['text']};
+            border: 1px solid {self.palette['border']};
+            border-radius: 4px;
+            text-align: left;
+        """)
         self.deselect_all_button.clicked.connect(self.deselect_all_images)
         self.deselect_all_button.setEnabled(False)
         select_buttons_layout.addWidget(self.deselect_all_button)
@@ -164,27 +452,122 @@ class MainWindow(QMainWindow):
         select_buttons_layout.addStretch()
         images_layout.addLayout(select_buttons_layout)
         
-        main_layout.addWidget(images_group)
+        # スクロール可能な画像グリッドエリア
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMinimumHeight(300)  # 最低限の高さを確保
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet(f"background-color: white;")
+        
+        self.images_grid = QGridLayout(scroll_content)
+        self.images_grid.setContentsMargins(10, 10, 10, 10)
+        self.images_grid.setSpacing(15)  # グリッド内の間隔を広げる
+        
+        scroll_area.setWidget(scroll_content)
+        images_layout.addWidget(scroll_area)
+        
+        main_layout.addWidget(images_group, 1)  # 画像表示セクションに伸縮性を持たせる
         
         # --- ステータス表示セクション ---
-        status_group = QGroupBox("ステータス")
+        status_group = QGroupBox("進捗状況")
+        status_group.setStyleSheet(f"""
+            QGroupBox {{
+                border: 1px solid {self.palette['border']};
+                border-radius: 8px;
+                margin-top: 1.5ex;
+                padding: 12px;
+                background-color: {self.palette['card']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top center;
+                padding: 0 8px;
+                color: {self.palette['primary']};
+                font-size: 13px;
+                font-weight: bold;
+                background-color: {self.palette['card']};
+            }}
+        """)
         status_layout = QVBoxLayout(status_group)
+        status_layout.setContentsMargins(15, 20, 15, 15)
+        status_layout.setSpacing(12)
         
         # プログレスバー
+        progress_layout = QHBoxLayout()
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(10)
+        
+        progress_label = QLabel("処理状況:")
+        progress_label.setMinimumWidth(70)
+        progress_label.setStyleSheet(f"color: {self.palette['text']}; font-weight: bold;")
+        
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
-        status_layout.addWidget(self.progress_bar)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                border: none;
+                border-radius: 4px;
+                background-color: #e0e0e0;
+                color: {self.palette['text']};
+                font-weight: bold;
+                min-height: 20px;
+                max-height: 20px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {self.palette['primary']};
+                border-radius: 4px;
+            }}
+        """)
+        
+        progress_layout.addWidget(progress_label)
+        progress_layout.addWidget(self.progress_bar)
+        status_layout.addLayout(progress_layout)
         
         # ログテキストエリア
+        log_layout = QVBoxLayout()
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.setSpacing(8)
+        
+        log_label = QLabel("処理ログ:")
+        log_label.setStyleSheet(f"color: {self.palette['text']}; font-weight: bold;")
+        log_layout.addWidget(log_label)
+        
+        log_frame = QFrame()
+        log_frame.setStyleSheet(f"""
+            background-color: white;
+            border: 1px solid {self.palette['border']};
+            border-radius: 6px;
+        """)
+        log_frame_layout = QVBoxLayout(log_frame)
+        log_frame_layout.setContentsMargins(10, 10, 10, 10)
+        
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(150)
-        status_layout.addWidget(self.log_text)
+        self.log_text.setMaximumHeight(120)
+        self.log_text.setStyleSheet("""
+            border: none;
+            background-color: white;
+            font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            padding: 0;
+        """)
+        log_frame_layout.addWidget(self.log_text)
+        
+        log_layout.addWidget(log_frame)
+        status_layout.addLayout(log_layout)
         
         main_layout.addWidget(status_group)
         
         # ステータスバー
         self.statusBar().showMessage("準備完了")
+        self.statusBar().setStyleSheet(f"""
+            background-color: {self.palette['background']};
+            border-top: 1px solid {self.palette['border']};
+            padding: 3px;
+        """)
         
         # UIの初期化が完了したことをログに記録
         self.log_message("アプリケーションの準備が完了しました。")
@@ -220,10 +603,34 @@ class MainWindow(QMainWindow):
         if is_logged_in:
             self.log_message("Googleにログイン済みです")
             self.statusBar().showMessage("Googleにログイン済み")
+            
+            # ログイン状態を視覚的に表示
+            self.login_button.setStyleSheet(f"""
+                background-color: {self.palette['success']};
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 6px;
+                min-height: 36px;
+                text-align: left;
+            """)
+            
             QMessageBox.information(self, "ログイン状態", "Googleにログイン済みです。画像投稿が可能です。")
         else:
             self.log_message("Googleにログインが必要です")
             self.statusBar().showMessage("Googleにログインが必要です")
+            
+            # 未ログイン状態を視覚的に表示
+            self.login_button.setStyleSheet(f"""
+                background-color: {self.palette['error']};
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 6px;
+                min-height: 36px;
+                text-align: left;
+            """)
+            
             reply = QMessageBox.question(
                 self, 'ログイン', 'Googleにログインが必要です。ログインを実行しますか？',
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -254,10 +661,34 @@ class MainWindow(QMainWindow):
         if login_success:
             self.log_message("Googleログインが完了しました")
             self.statusBar().showMessage("Googleログイン完了")
+            
+            # ログイン成功状態を視覚的に表示
+            self.login_button.setStyleSheet(f"""
+                background-color: {self.palette['success']};
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 6px;
+                min-height: 36px;
+                text-align: left;
+            """)
+            
             QMessageBox.information(self, "ログイン完了", "Googleログインが完了しました。画像投稿が可能です。")
         else:
             self.log_message("Googleログインに失敗しました")
             self.statusBar().showMessage("Googleログイン失敗")
+            
+            # ログイン失敗状態を視覚的に表示
+            self.login_button.setStyleSheet(f"""
+                background-color: {self.palette['error']};
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 6px;
+                min-height: 36px;
+                text-align: left;
+            """)
+            
             QMessageBox.warning(self, "ログイン失敗", "Googleログインに失敗しました。もう一度試すか、手動でログインしてください。")
     
     def fetch_images(self):
@@ -276,6 +707,18 @@ class MainWindow(QMainWindow):
         self.upload_button.setEnabled(False)
         self.select_all_button.setEnabled(False)
         self.deselect_all_button.setEnabled(False)
+        
+        # ボタンのスタイルを変更して無効状態を視覚的に表示
+        self.fetch_button.setStyleSheet(f"""
+            background-color: {self.palette['disabled']};
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            min-height: 40px;
+            padding: 0 20px;
+            border-radius: 6px;
+            text-align: left;
+        """)
         
         # Step 1: サロン名を取得
         worker = Worker(get_salon_name, hpb_url)
@@ -332,9 +775,42 @@ class MainWindow(QMainWindow):
             self.upload_button.setEnabled(True)
             self.select_all_button.setEnabled(True)
             self.deselect_all_button.setEnabled(True)
+            
+            # ボタンスタイルを元に戻す
+            self.fetch_button.setStyleSheet(f"""
+                background-color: {self.palette['primary']};
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                min-height: 40px;
+                padding: 0 20px;
+                border-radius: 6px;
+                text-align: left;
+            """)
+            
+            # 成功メッセージを表示
+            QMessageBox.information(
+                self, 
+                "画像取得完了", 
+                f"{len(image_paths)}件の画像を取得しました。\n投稿する画像を選択してください。"
+            )
+            
         else:
             self.log_message("画像のダウンロードに失敗しました")
             self.fetch_button.setEnabled(True)
+            
+            # ボタンスタイルを元に戻す
+            self.fetch_button.setStyleSheet(f"""
+                background-color: {self.palette['primary']};
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                min-height: 40px;
+                padding: 0 20px;
+                border-radius: 6px;
+                text-align: left;
+            """)
+            
             self.statusBar().showMessage("画像のダウンロードに失敗しました")
         
         self.fetch_button.setEnabled(True)
@@ -346,40 +822,120 @@ class MainWindow(QMainWindow):
             self.images_grid.itemAt(i).widget().setParent(None)
         self.image_checkboxes.clear()
         
-        # サムネイルサイズ
-        thumbnail_size = 150
+        # サムネイルサイズ - 大きく表示
+        thumbnail_size = 200
         
-        # 画像を3列のグリッドで表示
+        # グリッド内の列数を計算（ウィンドウサイズに応じて調整）
+        grid_columns = max(3, min(5, self.width() // 250))
+        
+        # 画像をグリッドで表示
         for idx, image_path in enumerate(image_paths):
-            row, col = divmod(idx, 3)
+            row, col = divmod(idx, grid_columns)
             
             # 画像フレーム
             frame = QFrame()
-            frame.setFrameShape(QFrame.Shape.StyledPanel)
+            frame.setStyleSheet(f"""
+                border: 1px solid {self.palette['card_border']};
+                border-radius: 10px;
+                background-color: white;
+                margin: 8px;
+            """)
+            
+            # 影をつけるのは難しいので、より洗練された枠線効果を適用
             frame_layout = QVBoxLayout(frame)
+            frame_layout.setContentsMargins(0, 0, 0, 0)
+            frame_layout.setSpacing(0)
+            
+            # 画像コンテナ（上部）
+            image_container = QWidget()
+            image_container.setFixedHeight(thumbnail_size + 20)
+            image_container.setStyleSheet(f"""
+                background-color: white;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                border-bottom: 1px solid {self.palette['card_border']};
+            """)
+            
+            image_container_layout = QVBoxLayout(image_container)
+            image_container_layout.setContentsMargins(10, 10, 10, 10)
+            image_container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             # 画像のロードと表示
             pixmap = QPixmap(image_path)
-            pixmap = pixmap.scaled(thumbnail_size, thumbnail_size, Qt.AspectRatioMode.KeepAspectRatio)
-            image_label = QLabel()
-            image_label.setPixmap(pixmap)
-            image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            frame_layout.addWidget(image_label)
+            scaled_pixmap = pixmap.scaled(
+                thumbnail_size, thumbnail_size, 
+                Qt.AspectRatioMode.KeepAspectRatio, 
+                Qt.TransformationMode.SmoothTransformation
+            )
             
-            # ファイル名表示
+            image_label = QLabel()
+            image_label.setPixmap(scaled_pixmap)
+            image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image_label.setStyleSheet("""
+                border: none;
+                background-color: transparent;
+            """)
+            image_container_layout.addWidget(image_label)
+            frame_layout.addWidget(image_container)
+            
+            # 情報コンテナ（下部）
+            info_container = QWidget()
+            info_container.setStyleSheet(f"""
+                background-color: #f8f9fa;
+                border-bottom-left-radius: 10px;
+                border-bottom-right-radius: 10px;
+                padding: 5px;
+            """)
+            
+            info_layout = QVBoxLayout(info_container)
+            info_layout.setContentsMargins(10, 8, 10, 8)
+            info_layout.setSpacing(6)
+            
+            # ファイル名表示（省略表示）
             filename = os.path.basename(image_path)
-            name_label = QLabel(filename)
+            if len(filename) > 20:
+                # ファイル名が長い場合は省略
+                display_name = filename[:10] + "..." + filename[-7:]
+            else:
+                display_name = filename
+                
+            name_label = QLabel(display_name)
             name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            frame_layout.addWidget(name_label)
+            name_label.setStyleSheet(f"""
+                color: {self.palette['text']};
+                font-size: 11px;
+                font-weight: bold;
+                padding: 2px;
+            """)
+            name_label.setToolTip(filename)  # 完全なファイル名をツールチップで表示
+            info_layout.addWidget(name_label)
             
             # チェックボックス（デフォルトで選択済み）
-            checkbox = QCheckBox("選択")
+            checkbox_container = QWidget()
+            checkbox_container.setStyleSheet("background-color: transparent;")
+            checkbox_layout = QHBoxLayout(checkbox_container)
+            checkbox_layout.setContentsMargins(0, 0, 0, 0)
+            checkbox_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            checkbox = QCheckBox("選択する")
             checkbox.setChecked(True)
             checkbox.setProperty("image_path", image_path)
+            checkbox.setStyleSheet(f"""
+                font-size: 12px;
+                color: {self.palette['text']};
+                spacing: 5px;
+            """)
             self.image_checkboxes.append(checkbox)
-            frame_layout.addWidget(checkbox)
+            checkbox_layout.addWidget(checkbox)
+            
+            info_layout.addWidget(checkbox_container)
+            frame_layout.addWidget(info_container)
             
             self.images_grid.addWidget(frame, row, col)
+        
+        # 画像枠の最小幅を設定して見切れを防止
+        for col in range(grid_columns):
+            self.images_grid.setColumnMinimumWidth(col, thumbnail_size + 40)
     
     def select_all_images(self):
         """全ての画像を選択"""
@@ -433,6 +989,19 @@ class MainWindow(QMainWindow):
         
         # アップロード実行
         self.upload_button.setEnabled(False)
+        
+        # ボタンのスタイルを変更して処理中状態を視覚的に表示
+        self.upload_button.setStyleSheet(f"""
+            background-color: {self.palette['disabled']};
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            min-height: 40px;
+            padding: 0 20px;
+            border-radius: 6px;
+            text-align: left;
+        """)
+        
         self.statusBar().showMessage("GBPに画像をアップロード中...")
         self.progress_bar.setValue(0)
         
@@ -452,16 +1021,66 @@ class MainWindow(QMainWindow):
             self.log_message("画像の投稿が完了しました")
             self.statusBar().showMessage("画像投稿完了")
             self.progress_bar.setValue(100)
+            
+            # ボタンスタイルを元に戻す
+            self.upload_button.setStyleSheet(f"""
+                background-color: {self.palette['secondary']};
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                min-height: 40px;
+                padding: 0 20px;
+                border-radius: 6px;
+                text-align: left;
+            """)
+            
             QMessageBox.information(self, "投稿完了", "画像の投稿が完了しました。")
         else:
             self.log_message("画像の投稿に失敗しました")
             self.statusBar().showMessage("画像投稿失敗")
+            
+            # ボタンスタイルを元に戻す
+            self.upload_button.setStyleSheet(f"""
+                background-color: {self.palette['secondary']};
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                min-height: 40px;
+                padding: 0 20px;
+                border-radius: 6px;
+                text-align: left;
+            """)
+            
             QMessageBox.warning(self, "投稿失敗", "画像の投稿に失敗しました。ログイン状態とGBP URLを確認してください。")
     
     def on_worker_error(self, error_msg):
         """ワーカースレッドでエラーが発生した場合の処理"""
         self.log_message(f"エラーが発生しました: {error_msg}")
         self.statusBar().showMessage("エラーが発生しました")
+        
+        # ボタンスタイルを元に戻す
+        self.fetch_button.setStyleSheet(f"""
+            background-color: {self.palette['primary']};
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            min-height: 40px;
+            padding: 0 20px;
+            border-radius: 6px;
+            text-align: left;
+        """)
+        
+        self.upload_button.setStyleSheet(f"""
+            background-color: {self.palette['secondary']};
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            min-height: 40px;
+            padding: 0 20px;
+            border-radius: 6px;
+            text-align: left;
+        """)
+        
         self.fetch_button.setEnabled(True)
         
     def perform_manual_google_login(self):
@@ -485,10 +1104,34 @@ class MainWindow(QMainWindow):
         if login_success:
             self.log_message("Google手動ログインが完了しました")
             self.statusBar().showMessage("Google手動ログイン完了")
+            
+            # ログイン成功状態を視覚的に表示
+            self.login_button.setStyleSheet(f"""
+                background-color: {self.palette['success']};
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 6px;
+                min-height: 36px;
+                text-align: left;
+            """)
+            
             QMessageBox.information(self, "ログイン完了", "Google手動ログインが完了しました。画像投稿が可能です。")
         else:
             self.log_message("Google手動ログインに失敗しました")
             self.statusBar().showMessage("Google手動ログイン失敗")
+            
+            # ログイン失敗状態を視覚的に表示
+            self.login_button.setStyleSheet(f"""
+                background-color: {self.palette['error']};
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 6px;
+                min-height: 36px;
+                text-align: left;
+            """)
+            
             QMessageBox.warning(self, "ログイン失敗", "Google手動ログインに失敗しました。もう一度試すか、別の方法でログインしてください。")
     
     def closeEvent(self, event):
