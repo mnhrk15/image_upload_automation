@@ -123,3 +123,5 @@ temp/
 *.log
 
 storage_state.json*
+
+.specstory/
