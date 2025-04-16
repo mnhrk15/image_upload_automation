@@ -468,7 +468,7 @@ class GBPUploader:
         self.context = context
         self.gbp_selectors = get_gbp_selectors()
         self.settings = get_settings()
-        self.upload_wait_seconds = self.settings.get('upload_wait_seconds', 10)
+        self.upload_wait_seconds = self.settings.get('upload_wait_seconds', 5)
         self.default_timeout = 60000 # 60秒
     
     async def _save_error_page(self, page: Page, filename_base: str = "error"):
@@ -487,7 +487,7 @@ class GBPUploader:
             logger.error(f"エラーページの保存中にエラー: {save_error}")
 
     async def upload_images(self, gbp_url: str, image_paths: List[str], page: Optional[Page] = None, progress_callback=None) -> bool:
-        """GBPに画像をアップロード (ファイル選択 iframe 対応)"""
+        """GBPに画像をアップロード (ファイル選択 iframe 対応, expect_file_chooser使用)"""
         
         upload_page = page 
         should_create_page = False
@@ -499,14 +499,13 @@ class GBPUploader:
         
         logger.info(f"GBP投稿画面処理を開始 (Page: {'新規' if should_create_page else '既存'})")
         
-        # セレクタ定義 (本来は config.json 推奨)
-        add_photo_selector = 'a:has-text("写真を追加")' 
-        file_upload_iframe_selector = 'iframe[src*="/promote/photos/add"]' # ファイル選択iframe
-        # upload_modal_selector は iframe 内の要素か確認が必要だが、一旦そのまま使う
-        upload_modal_selector = self.gbp_selectors.get('upload_modal', 'div[role="dialog"]' ) # デフォルト値も設定
-        file_input_selector = self.gbp_selectors.get('file_input') # 古い: input[type=file] (もう使わないかも)
-        select_files_button_selector = 'button:has-text("画像と動画を選択")' # 新しい: 見えるボタン
-        post_button_selector = self.gbp_selectors.get('post_button')
+        # --- セレクタを config.json から読み込む --- 
+        add_photo_selector = self.gbp_selectors.get('photo_upload', {}).get('add_button', 'a:has-text("写真を追加")') # デフォルト値も設定
+        file_upload_iframe_selector = self.gbp_selectors.get('photo_upload', {}).get('upload_iframe', 'iframe[src*="/promote/photos/add"]')
+        select_files_button_selector = self.gbp_selectors.get('photo_upload', {}).get('select_button', 'button:has-text("画像と動画を選択")')
+        # post_button_selector は不要
+        # file_input_selector も不要
+        # upload_modal_selector も不要
 
         try:
             if should_create_page:
@@ -516,11 +515,10 @@ class GBPUploader:
                 logger.debug("ページ移動完了 (networkidle)。")
             
             logger.debug(f"現在のページ ({upload_page.url}) でアップロード処理を開始します")
-            await asyncio.sleep(3) 
             
             # --- 1. 写真追加ボタンをクリック (メインページ) ---
             try:
-                logger.debug(f"写真追加ボタンが表示されるのを待機中... Timeout={self.default_timeout}ms")
+                logger.debug(f"写真追加ボタンが表示されるのを待機中... セレクタ: {add_photo_selector}, Timeout={self.default_timeout}ms")
                 await upload_page.wait_for_selector(add_photo_selector, timeout=self.default_timeout, state='visible')
                 logger.info("写真追加ボタンが見つかりました")
             except TimeoutError:
@@ -528,7 +526,6 @@ class GBPUploader:
                 await self._save_error_page(upload_page, "error_add_button")
                 return False 
             
-            await asyncio.sleep(2)
             logger.debug(f"写真追加ボタンをクリックします: {add_photo_selector}")
             await upload_page.click(add_photo_selector)
             logger.info("写真追加ボタンをクリックしました")
@@ -552,10 +549,8 @@ class GBPUploader:
             # 新しい方法: expect_file_chooser
             try:
                 logger.info("ファイルチューザーの準備 (ページ全体で待機)...")
-                # ページオブジェクトに対して expect_file_chooser を呼び出す
                 async with upload_page.expect_file_chooser(timeout=self.default_timeout) as fc_info:
                     logger.debug(f"「画像と動画を選択」ボタンをクリックします (iframe 内): {select_files_button_selector}")
-                    # クリックアクションは iframe 内の要素に対して行う
                     await upload_frame_locator.locator(select_files_button_selector).click()
                     logger.info("「画像と動画を選択」ボタンをクリックしました (iframe 内)")
                 
@@ -567,11 +562,20 @@ class GBPUploader:
                 await file_chooser.set_files(image_paths)
                 logger.info("画像ファイルを選択しました (ファイルチューザー経由)")
                 
-                # ファイル選択 = アップロード完了と見なすため、投稿ボタン処理は削除
-                # 念のため短い待機時間を設ける
-                upload_complete_wait = self.upload_wait_seconds # 設定値を使う (デフォルト10秒)
-                logger.info(f"ファイル選択完了、アップロード完了まで {upload_complete_wait} 秒待機します...")
-                await asyncio.sleep(upload_complete_wait)
+                # upload_complete_wait = self.upload_wait_seconds # 設定値を使う
+                # logger.info(f"ファイル選択完了、アップロード完了まで {upload_complete_wait} 秒待機します...")
+                # await asyncio.sleep(upload_complete_wait)
+                
+                # --- 動的待機: アップロード iframe が閉じるのを待つ --- 
+                upload_complete_timeout = self.default_timeout * 2 # タイムアウトを長めに設定 (例: 2分)
+                logger.info(f"ファイル選択完了、アップロード完了 (iframe が閉じる) を待機します... Timeout={upload_complete_timeout}ms")
+                try:
+                    await upload_page.wait_for_selector(file_upload_iframe_selector, state='hidden', timeout=upload_complete_timeout)
+                    logger.info("ファイルアップロード iframe が閉じました。アップロード完了と見なします。")
+                except TimeoutError:
+                    logger.warning("アップロード完了待機中にタイムアウトしました (iframe が閉じませんでした)。プロセスは完了している可能性があります。")
+                    # タイムアウトしても、成功とみなして続行するか、エラーにするか選択可能
+                    # ここでは警告ログのみ出力し、成功として扱う
                 
                 logger.info("画像の投稿プロセスが完了したと見なします (投稿ボタンなし)")
                 return True
@@ -724,14 +728,20 @@ def manual_login(progress_callback=None) -> bool:
 
 # 新しい非同期ヘルパー関数
 async def _async_upload_logic(pw_manager: PlaywrightManager, gbp_url: str, image_paths: List[str], progress_callback=None) -> bool:
-    """単一ページでログイン確認からアップロードまで行う非同期ロジック (iframe 内外操作修正)"""
+    """単一ページでログイン確認からアップロードまで行う非同期ロジック (セレクタをconfigから読み込み)"""
     context = None
     page = None
     upload_success = False
-    # セレクタ定義 (本来は config.json 推奨)
-    owner_check_button_selector = 'a[jsname="ndJ4N"]:has-text("このビジネスのオーナーですか？")'
-    iframe_selector = 'iframe[src^="/local/business/setup/create"]' # iframeを特定するセレクタ
-    continue_button_selector = 'button:has-text("続行")' # iframe内の続行ボタン
+    
+    # --- セレクタを config.json から読み込む --- 
+    # get_gbp_selectors() は GBPUploader.__init__ で呼ばれるので、ここでは pw_manager 経由ではなく直接呼ぶか、
+    # GBPUploader インスタンスをここで生成してそこから取得する必要がある。
+    # -> この関数は GBPUploader のメソッドではないため、GBPUploader のインスタンス変数 self.gbp_selectors を参照できない。
+    # -> GBPUploader のインスタンスをここで作るか、get_gbp_selectors() を再度呼ぶ。後者がシンプル。
+    gbp_selectors = get_gbp_selectors()
+    owner_check_button_selector = gbp_selectors.get('owner_check', {}).get('owner_button', 'a[jsname="ndJ4N"]:has-text("このビジネスのオーナーですか？")')
+    iframe_selector = gbp_selectors.get('owner_check', {}).get('iframe', 'iframe[src^="/local/business/setup/create"]')
+    continue_button_selector = gbp_selectors.get('owner_check', {}).get('continue_button', 'button:has-text("続行")')
 
     try:
         context = await pw_manager.start()
@@ -755,30 +765,32 @@ async def _async_upload_logic(pw_manager: PlaywrightManager, gbp_url: str, image
 
         # --- 2.5 オーナー確認ステップ (iframe 内外操作) --- 
         try:
-            # 2.5.1 iframe 外の「このビジネスのオーナーですか？」ボタンをクリック
-            logger.info("「このビジネスのオーナーですか？」ボタンを検索中 (メインページ)...")
+            logger.info(f"「このビジネスのオーナーですか？」ボタンを検索中 (セレクタ: {owner_check_button_selector})...")
             await page.wait_for_selector(owner_check_button_selector, timeout=15000, state='visible')
             logger.info("「このビジネスのオーナーですか？」ボタンを発見、クリックします。")
             await page.click(owner_check_button_selector)
             
-            # 2.5.2 iframe の出現を待機
-            logger.info("オーナー確認用 iframe の出現を待機中...")
+            logger.info(f"オーナー確認用 iframe の出現を待機中 (セレクタ: {iframe_selector})...")
             await page.wait_for_selector(iframe_selector, timeout=15000, state='visible')
             logger.info("オーナー確認用 iframe が表示されました。")
             frame_locator = page.frame_locator(iframe_selector)
             logger.debug("iframe の FrameLocator を取得しました。")
 
-            # 2.5.3 iframe 内の「続行」ボタンをクリック
-            logger.info("iframe 内の「続行」ボタンを検索中...")
+            logger.info(f"iframe 内の「続行」ボタンを検索中 (セレクタ: {continue_button_selector})...")
             await frame_locator.locator(continue_button_selector).wait_for(state='visible', timeout=30000)
             logger.info("iframe 内の「続行」ボタンを発見、クリックします。")
             await frame_locator.locator(continue_button_selector).click()
             
-            logger.info("オーナー確認ステップ完了。ページ更新/iframe閉鎖を待機します...")
-            await asyncio.sleep(7) # iframeが閉じて元のページに戻るのを少し長めに待つ
+            # --- 動的待機: オーナー確認 iframe が閉じるのを待つ --- 
+            owner_iframe_close_timeout = 30000 # 30秒
+            logger.info(f"オーナー確認ステップ完了。iframe が閉じるのを待機します... Timeout={owner_iframe_close_timeout}ms")
+            try:
+                await page.wait_for_selector(iframe_selector, state='hidden', timeout=owner_iframe_close_timeout)
+                logger.info("オーナー確認 iframe が閉じました。")
+            except TimeoutError:
+                logger.warning("オーナー確認 iframe が閉じるのを待機中にタイムアウトしました。続行します。")
 
         except TimeoutError:
-            # 「オーナーですか」ボタン、iframe、または「続行」ボタンのいずれかが見つからなかった場合
             logger.info("オーナー確認ステップのいずれかの要素が見つかりませんでした（タイムアウト）。すでに確認済みか、ページ構造が異なる可能性があります。スキップして続行します。")
         except Exception as owner_check_error:
             logger.warning(f"オーナー確認ステップで予期せぬエラー: {owner_check_error}", exc_info=True)
@@ -786,13 +798,8 @@ async def _async_upload_logic(pw_manager: PlaywrightManager, gbp_url: str, image
 
         # --- 3. アップロード実行 (元のページコンテキストに戻っているはず) --- 
         logger.debug("オーナー確認後、アップロード処理を開始します (メインページ)")
-        uploader = GBPUploader(context)
-        # upload_images は page=None で呼び出し、内部で page.goto せずに現在のページを使うように修正が必要かもしれない
-        # → いや、_async_upload_logic 内で page を使い続けるので、upload_images に渡す必要はない
-        # GBPUploader.upload_images を修正して、内部で page を作成・goto するのではなく、
-        # _async_upload_logic から渡された page (メインページ) を使うようにするべき。
-        # 現状のGBPUploader.upload_imagesはpage引数を取るが、内部のgotoはコメントアウトされている。
-        # このままで、メインページ上の要素を探しに行くはず。
+        uploader = GBPUploader(context) # GBPUploader をここでインスタンス化
+        # upload_images は context を共有する uploader インスタンスから呼び出す
         upload_success = await uploader.upload_images(gbp_url, image_paths, page=page, progress_callback=progress_callback)
         
         # --- 4. 成功時のみ storage_state を保存 --- 
