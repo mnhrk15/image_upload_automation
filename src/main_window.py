@@ -28,7 +28,6 @@ class WorkerSignals(QObject):
     error = pyqtSignal(str)
     progress = pyqtSignal(int, str)
     result = pyqtSignal(object)
-    log = pyqtSignal(str)
 
 class Worker(QRunnable):
     """バックグラウンドでタスクを実行するワーカークラス"""
@@ -58,6 +57,9 @@ class Worker(QRunnable):
 class MainWindow(QMainWindow):
     """アプリケーションのメインウィンドウ"""
     
+    # UI更新用のシグナルを追加
+    update_log_signal = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         
@@ -69,6 +71,9 @@ class MainWindow(QMainWindow):
         self.image_checkboxes = []  # 画像のチェックボックスを保存
         
         self.init_ui()
+        
+        # シグナルとスロットを接続
+        self.update_log_signal.connect(self._append_log_text)
     
     def init_ui(self):
         """UIの初期化"""
@@ -184,11 +189,18 @@ class MainWindow(QMainWindow):
         # UIの初期化が完了したことをログに記録
         self.log_message("アプリケーションの準備が完了しました。")
     
+    @pyqtSlot(str)
+    def _append_log_text(self, message: str):
+        """メインスレッドでログテキストエリアにメッセージを追加するスロット"""
+        self.log_text.append(message)
+    
     def log_message(self, message: str):
-        """ログメッセージを表示エリアに追加"""
+        """ログメッセージをシグナル経由で表示エリアに追加"""
         timestamp = time.strftime("%H:%M:%S", time.localtime())
-        self.log_text.append(f"[{timestamp}] {message}")
-        logger.info(message)
+        formatted_message = f"[{timestamp}] {message}"
+        # 直接UIを更新せず、シグナルを発行する
+        self.update_log_signal.emit(formatted_message)
+        logger.info(message) # ロガーへの出力はスレッドセーフ
     
     def check_google_login(self):
         """Googleログイン状態をチェック"""
@@ -400,10 +412,11 @@ class MainWindow(QMainWindow):
         self.log_message(f"GBP URL: {gbp_url}")
         
         # ログイン状態を確認
-        worker = Worker(check_login)
-        worker.signals.result.connect(lambda is_logged_in: self.proceed_with_upload(is_logged_in, gbp_url, selected_paths))
-        worker.signals.error.connect(self.on_worker_error)
-        self.threadpool.start(worker)
+        check_worker = Worker(check_login)
+        check_worker.signals.result.connect(lambda logged_in: self.proceed_with_upload(logged_in, gbp_url, selected_paths))
+        check_worker.signals.error.connect(self.on_worker_error)
+        check_worker.signals.finished.connect(lambda: self.upload_button.setEnabled(True))
+        self.threadpool.start(check_worker)
     
     def proceed_with_upload(self, is_logged_in, gbp_url, selected_paths):
         """ログイン状態に応じてアップロードを続行するかログインを促す"""
@@ -427,11 +440,11 @@ class MainWindow(QMainWindow):
             self.log_message(message)
             
         # GBP投稿ワーカーを作成
-        worker = Worker(upload_to_gbp, gbp_url, selected_paths, progress_callback)
-        worker.signals.result.connect(self.on_upload_result)
-        worker.signals.error.connect(self.on_worker_error)
-        worker.signals.finished.connect(lambda: self.upload_button.setEnabled(True))
-        self.threadpool.start(worker)
+        upload_worker = Worker(upload_to_gbp, gbp_url, selected_paths, progress_callback)
+        upload_worker.signals.result.connect(self.on_upload_result)
+        upload_worker.signals.error.connect(self.on_worker_error)
+        upload_worker.signals.finished.connect(lambda: self.upload_button.setEnabled(True))
+        self.threadpool.start(upload_worker)
     
     def on_upload_result(self, upload_success):
         """アップロード結果の処理"""

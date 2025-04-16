@@ -487,107 +487,110 @@ class GBPUploader:
             logger.error(f"エラーページの保存中にエラー: {save_error}")
 
     async def upload_images(self, gbp_url: str, image_paths: List[str], page: Optional[Page] = None, progress_callback=None) -> bool:
-        """GBPに画像をアップロード (既存Pageオブジェクト利用可)"""
+        """GBPに画像をアップロード (ファイル選択 iframe 対応)"""
         
-        upload_page = page # 渡されたページを使う
+        upload_page = page 
         should_create_page = False
         
         if upload_page is None:
             logger.warning("upload_images: Pageオブジェクトが渡されませんでした。新規作成します。")
             should_create_page = True
-            # このケースは今回の修正フローでは発生しない想定だが、フォールバックとして残す
+            # このケースは現在のフローでは発生しない想定
         
         logger.info(f"GBP投稿画面処理を開始 (Page: {'新規' if should_create_page else '既存'})")
         
+        # セレクタ定義 (本来は config.json 推奨)
+        add_photo_selector = 'a:has-text("写真を追加")' 
+        file_upload_iframe_selector = 'iframe[src*="/promote/photos/add"]' # ファイル選択iframe
+        # upload_modal_selector は iframe 内の要素か確認が必要だが、一旦そのまま使う
+        upload_modal_selector = self.gbp_selectors.get('upload_modal', 'div[role="dialog"]' ) # デフォルト値も設定
+        file_input_selector = self.gbp_selectors.get('file_input') # 古い: input[type=file] (もう使わないかも)
+        select_files_button_selector = 'button:has-text("画像と動画を選択")' # 新しい: 見えるボタン
+        post_button_selector = self.gbp_selectors.get('post_button')
+
         try:
             if should_create_page:
                 upload_page = await self.context.new_page()
+                logger.debug(f"新規ページでURLへ移動: {gbp_url}")
+                await upload_page.goto(gbp_url, timeout=self.default_timeout, wait_until='networkidle')
+                logger.debug("ページ移動完了 (networkidle)。")
             
-            # --- page.goto は呼び出し元 (またはこのメソッドの開始部分) で実行済みとする --- 
-            # logger.debug(f"ページを開きました。URLへ移動: {gbp_url}")
-            # await upload_page.goto(gbp_url, timeout=self.default_timeout, wait_until='networkidle')
-            # logger.debug("ページ移動完了 (networkidle)。")
-            
-            # --- ページがすでにGBP URLにいる前提で処理を開始 --- 
             logger.debug(f"現在のページ ({upload_page.url}) でアップロード処理を開始します")
-            
-            # ページロード完了を待機 (goto直後でないため少し短くても良いかも)
             await asyncio.sleep(3) 
             
-            # 写真追加ボタンが表示されるまで待機
-            add_photo_selector = self.gbp_selectors.get('add_photo_button')
-            logger.debug(f"写真追加ボタンのセレクタ: {add_photo_selector}")
-            
+            # --- 1. 写真追加ボタンをクリック (メインページ) ---
             try:
                 logger.debug(f"写真追加ボタンが表示されるのを待機中... Timeout={self.default_timeout}ms")
                 await upload_page.wait_for_selector(add_photo_selector, timeout=self.default_timeout, state='visible')
                 logger.info("写真追加ボタンが見つかりました")
             except TimeoutError:
-                logger.warning("写真追加ボタンが見つかりません。ページ構造が変更された可能性があります")
+                logger.warning("写真追加ボタンが見つかりません。ページ構造が変更されたか、ログイン状態が不正な可能性があります")
                 await self._save_error_page(upload_page, "error_add_button")
-                # ページを閉じるのは呼び出し元or finallyで行うためここでは return False のみ
                 return False 
             
-            # ... (以降の要素検索、クリック、ファイル設定、待機処理は upload_page を使う) ...
             await asyncio.sleep(2)
             logger.debug(f"写真追加ボタンをクリックします: {add_photo_selector}")
             await upload_page.click(add_photo_selector)
             logger.info("写真追加ボタンをクリックしました")
-            
+
+            # --- 2. ファイル選択 iframe を待機・特定 --- 
+            try:
+                logger.info(f"ファイル選択 iframe ({file_upload_iframe_selector}) の出現を待機中...")
+                await upload_page.wait_for_selector(file_upload_iframe_selector, timeout=self.default_timeout, state='visible')
+                logger.info("ファイル選択 iframe が表示されました。")
+                upload_frame_locator = upload_page.frame_locator(file_upload_iframe_selector)
+                logger.debug("ファイル選択 iframe の FrameLocator を取得しました。")
+            except TimeoutError:
+                 logger.warning("ファイル選択 iframe が見つかりませんでした（タイムアウト）。")
+                 await self._save_error_page(upload_page, "error_file_upload_iframe")
+                 return False
+
+            # --- 3. iframe 内でアップロード操作 (expect_file_chooser を使用) --- 
             if progress_callback:
                 progress_callback("写真アップロードダイアログを準備中...")
             
-            upload_modal_selector = self.gbp_selectors.get('upload_modal')
-            logger.debug(f"アップロードモーダルが表示されるのを待機中... セレクタ: {upload_modal_selector}, Timeout={self.default_timeout}ms")
-            await upload_page.wait_for_selector(upload_modal_selector, timeout=self.default_timeout, state='visible')
-            logger.info("アップロードモーダルが表示されました")
-            
-            file_input_selector = self.gbp_selectors.get('file_input')
-            logger.debug(f"ファイル入力要素が表示されるのを待機中... セレクタ: {file_input_selector}, Timeout={self.default_timeout}ms")
-            await upload_page.wait_for_selector(file_input_selector, timeout=self.default_timeout, state='visible')
-            logger.info("ファイル入力要素が表示されました")
-            
-            element = await upload_page.query_selector(file_input_selector)
-            if element:
-                logger.info(f"{len(image_paths)}枚の画像をアップロード中...")
+            # 新しい方法: expect_file_chooser
+            try:
+                logger.info("ファイルチューザーの準備 (ページ全体で待機)...")
+                # ページオブジェクトに対して expect_file_chooser を呼び出す
+                async with upload_page.expect_file_chooser(timeout=self.default_timeout) as fc_info:
+                    logger.debug(f"「画像と動画を選択」ボタンをクリックします (iframe 内): {select_files_button_selector}")
+                    # クリックアクションは iframe 内の要素に対して行う
+                    await upload_frame_locator.locator(select_files_button_selector).click()
+                    logger.info("「画像と動画を選択」ボタンをクリックしました (iframe 内)")
+                
+                file_chooser = await fc_info.value
+                logger.info(f"{len(image_paths)}枚の画像をファイルチューザーに設定中...")
                 if progress_callback:
                     progress_callback(f"{len(image_paths)}枚の画像をアップロード中...")
-                await asyncio.sleep(3)
-                logger.debug(f"ファイル入力要素に画像を設定: {image_paths}")
-                await element.set_input_files(image_paths)
-                logger.info("画像ファイルを選択しました")
-                upload_wait = self.upload_wait_seconds + 5
-                logger.debug(f"画像選択後 {upload_wait} 秒待機します...")
-                await asyncio.sleep(upload_wait)
-                post_button_selector = self.gbp_selectors.get('post_button')
-                post_button_timeout = self.default_timeout * 2
-                logger.debug(f"投稿ボタンが表示/有効になるのを待機中... セレクタ: {post_button_selector}, Timeout={post_button_timeout}ms")
-                await upload_page.wait_for_selector(post_button_selector, timeout=post_button_timeout, state='visible')
-                logger.info("投稿ボタンが見つかりました")
-                await asyncio.sleep(5)
-                if progress_callback:
-                    progress_callback("写真を投稿中...")
-                logger.debug(f"投稿ボタンをクリックします: {post_button_selector}")
-                await upload_page.click(post_button_selector)
-                logger.info("投稿ボタンをクリックしました")
-                post_complete_wait = self.upload_wait_seconds + 10
-                logger.debug(f"投稿処理完了を {post_complete_wait} 秒待機します...")
-                await asyncio.sleep(post_complete_wait)
-                logger.info("画像の投稿プロセスが完了したと見なします")
-                # ページはここでは閉じない
+                
+                await file_chooser.set_files(image_paths)
+                logger.info("画像ファイルを選択しました (ファイルチューザー経由)")
+                
+                # ファイル選択 = アップロード完了と見なすため、投稿ボタン処理は削除
+                # 念のため短い待機時間を設ける
+                upload_complete_wait = self.upload_wait_seconds # 設定値を使う (デフォルト10秒)
+                logger.info(f"ファイル選択完了、アップロード完了まで {upload_complete_wait} 秒待機します...")
+                await asyncio.sleep(upload_complete_wait)
+                
+                logger.info("画像の投稿プロセスが完了したと見なします (投稿ボタンなし)")
                 return True
-            else:
-                logger.error("ファイル入力要素が見つかりません")
-                await self._save_error_page(upload_page, "error_file_input")
+
+            except TimeoutError:
+                logger.error("ファイルチューザーが開かれるのを待機中にタイムアウトしました。ボタンが見つからないか、クリックに失敗した可能性があります。")
+                await self._save_error_page(upload_page, "error_file_chooser_timeout")
                 return False
-            
+            except Exception as fc_error:
+                logger.error(f"ファイルチューザーの処理中にエラー: {fc_error}", exc_info=True)
+                await self._save_error_page(upload_page, "error_file_chooser")
+                return False
+
         except Exception as e:
             logger.error(f"画像アップロード中に予期せぬエラーが発生しました: {e}", exc_info=True)
             if upload_page and not upload_page.is_closed():
-                 await self._save_error_page(upload_page, "error_unexpected")
+                 await self._save_error_page(upload_page, "error_unexpected_upload")
             return False
         finally:
-            # このメソッド内で新規作成した場合のみページを閉じる
             if should_create_page and upload_page and not upload_page.is_closed():
                 logger.debug("upload_images: 新規作成したアップロード用ページを閉じます")
                 await upload_page.close()
