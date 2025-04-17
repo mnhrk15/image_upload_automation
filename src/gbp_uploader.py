@@ -760,29 +760,41 @@ async def _async_upload_logic(pw_manager: PlaywrightManager, gbp_url: str, image
         await page.goto(gbp_url, timeout=60000, wait_until='networkidle')
         logger.debug(f"GBP URLへの移動完了: {page.url}")
 
-        # --- 2.5 オーナー確認ステップ (iframe 内外操作) ---
-        # 先に「写真を追加」ボタンが存在するか確認
+        # --- 2.5 オーナー確認ステップ / スキップ判定 ---
+        owner_check_visible = False
         add_photo_visible = False
-        try:
-            logger.info(f"「写真を追加」ボタンの初期表示を確認中 (セレクタ: {add_photo_selector})...")
-            # 短いタイムアウトで確認
-            await page.wait_for_selector(add_photo_selector, timeout=1000, state='visible')
-            add_photo_visible = True
-            logger.info("「写真を追加」ボタンが既に表示されているため、オーナー確認をスキップします。")
-        except TimeoutError:
-            logger.info("「写真を追加」ボタンがすぐには見つかりません。オーナー確認を試みます。")
-        except Exception as visibility_check_error:
-             logger.warning(f"「写真を追加」ボタンの表示確認中に予期せぬエラー: {visibility_check_error}", exc_info=True)
-             # エラーが発生した場合も、オーナー確認を試みる方が安全か？ -> とりあえず試みる方針で進める
 
-        # 「写真を追加」ボタンが見つからなかった場合のみオーナー確認を実行
-        if not add_photo_visible:
+        # まず「オーナー確認」ボタンの存在を確認 (短いタイムアウト)
+        try:
+            logger.info(f"「このビジネスのオーナーですか？」ボタンの存在を確認中 (セレクタ: {owner_check_button_selector})...")
+            await page.wait_for_selector(owner_check_button_selector, timeout=1000, state='visible')
+            owner_check_visible = True
+            logger.info("「このビジネスのオーナーですか？」ボタンが見つかりました。")
+        except TimeoutError:
+            logger.info("「このビジネスのオーナーですか？」ボタンは見つかりませんでした。次に「写真を追加」ボタンを確認します。")
+        except Exception as e:
+            logger.warning(f"「このビジネスのオーナーですか？」ボタンの表示確認中にエラー: {e}")
+
+        # 「オーナー確認」ボタンが見つからなかった場合のみ、「写真を追加」ボタンを確認
+        if not owner_check_visible:
             try:
-                logger.info(f"「このビジネスのオーナーですか？」ボタンを検索中 (セレクタ: {owner_check_button_selector})...")
-                await page.wait_for_selector(owner_check_button_selector, timeout=15000, state='visible')
-                logger.info("「このビジネスのオーナーですか？」ボタンを発見、クリックします。")
+                logger.info(f"「写真を追加」ボタンの存在を確認中 (セレクタ: {add_photo_selector})...")
+                await page.wait_for_selector(add_photo_selector, timeout=1000, state='visible') # タイムアウトはさらに短くても良いかも
+                add_photo_visible = True
+                logger.info("「写真を追加」ボタンが見つかりました。")
+            except TimeoutError:
+                logger.info("「写真を追加」ボタンも見つかりませんでした。")
+            except Exception as e:
+                logger.warning(f"「写真を追加」ボタンの表示確認中にエラー: {e}")
+
+        # オーナー確認を実行する条件: 「オーナー確認」ボタンが存在する場合
+        if owner_check_visible:
+            logger.info("オーナー確認ステップを実行します。")
+            try:
+                # --- オーナー確認の実際の処理 ---
+                logger.info("「このビジネスのオーナーですか？」ボタンをクリックします。")
                 await page.click(owner_check_button_selector)
-                
+
                 logger.info(f"オーナー確認用 iframe の出現を待機中 (セレクタ: {iframe_selector})...")
                 await page.wait_for_selector(iframe_selector, timeout=15000, state='visible')
                 logger.info("オーナー確認用 iframe が表示されました。")
@@ -804,13 +816,18 @@ async def _async_upload_logic(pw_manager: PlaywrightManager, gbp_url: str, image
                     logger.warning("オーナー確認 iframe が閉じるのを待機中にタイムアウトしました。続行します。")
 
             except TimeoutError:
-                logger.info("オーナー確認ステップのいずれかの要素が見つかりませんでした（タイムアウト）。すでに確認済みか、ページ構造が異なる可能性があります。スキップして続行します。")
+                logger.warning("オーナー確認ステップのいずれかの要素が見つかりませんでした（タイムアウト）。続行します。")
             except Exception as owner_check_error:
                 logger.warning(f"オーナー確認ステップで予期せぬエラー: {owner_check_error}", exc_info=True)
-                # await pw_manager._save_error_page(page, "error_owner_check") # 必要なら復活
+
+        elif add_photo_visible:
+            logger.info("「オーナー確認」ボタンがなく「写真を追加」ボタンが見つかったため、オーナー確認をスキップします。")
+        else:
+            logger.warning("「オーナー確認」ボタンも「写真を追加」ボタンも見つかりませんでした。そのままアップロード処理に進みます。")
+
 
         # --- 3. アップロード実行 (元のページコンテキストに戻っているはず) ---
-        logger.debug("オーナー確認後、アップロード処理を開始します (メインページ)")
+        logger.debug("アップロード処理を開始します (メインページ)") # ログメッセージ調整
         uploader = GBPUploader(context) # GBPUploader をここでインスタンス化
         # upload_images は context を共有する uploader インスタンスから呼び出す
         upload_success = await uploader.upload_images(gbp_url, image_paths, page=page, progress_callback=progress_callback)
