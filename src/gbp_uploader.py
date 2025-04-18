@@ -792,8 +792,9 @@ async def _async_upload_logic(pw_manager: PlaywrightManager, gbp_url: str, image
             logger.info("オーナー確認ステップを実行します。")
             try:
                 # --- オーナー確認の実際の処理 ---
-                logger.info("「このビジネスのオーナーですか？」ボタンをクリックします。")
-                await page.click(owner_check_button_selector)
+                logger.info(f"「このビジネスのオーナーですか？」ボタン（{owner_check_button_selector}）をクリックします。")
+                # locator を使用してクリック（自動待機機能あり）
+                await page.locator(owner_check_button_selector).click()
 
                 logger.info(f"オーナー確認用 iframe の出現を待機中 (セレクタ: {iframe_selector})...")
                 await page.wait_for_selector(iframe_selector, timeout=15000, state='visible')
