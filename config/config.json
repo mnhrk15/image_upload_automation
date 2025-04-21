@@ -11,4 +11,4 @@
         "select_button": "button:has-text('画像と動画を選択')"
     }
 }, 
-"settings": {"max_images_to_fetch": 10, "download_delay_seconds": 0.5, "upload_wait_seconds": 5, "storage_state_path": "storage_state.json", "headless": false}}
+"settings": {"max_images_to_fetch": 50, "download_delay_seconds": 0.5, "upload_wait_seconds": 5, "storage_state_path": "storage_state.json", "headless": false}}

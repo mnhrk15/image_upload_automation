@@ -132,17 +132,24 @@ def _get_style_page_info(hpb_top_url: str) -> Tuple[Optional[str], int]:
     logger.info(f"スタイルベースURL: {style_base_url}, 最大ページ数: {max_page}")
     return style_base_url, max_page
 
-def fetch_latest_style_images(hpb_top_url: str) -> List[str]:
+def fetch_latest_style_images(hpb_top_url: str, order: str = 'backward') -> List[str]:
     """
-    指定されたHPBトップURLから最新のスタイル画像URLを取得する。
-    最大10件 (設定ファイルで変更可能) のユニークな高解像度URLを返す。
+    指定されたHPBトップURLからスタイル画像URLを取得する。
+    指定された順序（'forward': 最初のページから, 'backward': 最後のページから）で取得する。
+    取得枚数は設定ファイル (max_images_to_fetch) に従う。
+    Args:
+        hpb_top_url (str): サロンのHPBトップページURL。
+        order (str, optional): 取得順序。'forward' または 'backward'。デフォルトは 'backward'。
+
+    Returns:
+        List[str]: ユニークな高解像度画像URLのリスト。
     """
-    logger.info(f"最新スタイル画像の取得を開始: {hpb_top_url}")
+    logger.info(f"スタイル画像取得を開始: {hpb_top_url} (順序: {order})")
     selectors = get_hpb_selectors()
     settings = get_settings()
     image_selector = selectors.get('style_image')
     cleanup_pattern = selectors.get('image_url_cleanup_pattern', '')
-    max_images = settings.get('max_images_to_fetch', 10)
+    max_images = settings.get('max_images_to_fetch', 50) # デフォルト値を50に変更 (設定ファイル優先)
     delay_seconds = settings.get('download_delay_seconds', 0.5)
 
     if not image_selector:
@@ -156,9 +163,20 @@ def fetch_latest_style_images(hpb_top_url: str) -> List[str]:
     unique_image_urls = set()
     fetched_urls_list = []
 
-    # 最終ページから遡って処理
-    for page_num in range(max_page, 0, -1):
+    # 取得順序に応じてページループを設定
+    if order == 'forward':
+        page_range = range(1, max_page + 1)
+        logger.info(f"最初のページから {max_images} 枚取得します (最大 {max_page} ページ)")
+    elif order == 'backward':
+        page_range = range(max_page, 0, -1)
+        logger.info(f"最後のページから {max_images} 枚取得します (最大 {max_page} ページ)")
+    else:
+        logger.error(f"無効な取得順序が指定されました: {order}。'forward' または 'backward' を使用してください。")
+        return []
+
+    for page_num in page_range:
         if len(unique_image_urls) >= max_images:
+            logger.info(f"目標の {max_images} 枚に達したため、処理を終了します。")
             break
 
         # ページURLの形式は「PN」大文字を使用
@@ -191,14 +209,18 @@ def fetch_latest_style_images(hpb_top_url: str) -> List[str]:
                     logger.error("スタイル画像が1枚も見つかりませんでした。サイト構造の変更またはセレクタの問題の可能性があります。")
                     return []
 
-            # ページ内の画像を逆順（新しい順）に処理
-            for img in reversed(img_elements):
+            # 取得順序に応じてページ内の画像処理順序を設定
+            # backward の場合は reversed を維持し、forward の場合はそのまま (HTML順)
+            image_elements_to_process = reversed(img_elements) if order == 'backward' else img_elements
+
+            for img in image_elements_to_process:
                 src = img.get('src')
                 cleaned_url = _get_cleaned_image_url(src, cleanup_pattern)
 
                 if cleaned_url and cleaned_url not in unique_image_urls:
                     unique_image_urls.add(cleaned_url)
-                    fetched_urls_list.append(cleaned_url)
+                    # fetched_urls_list に追加する順序は取得順そのまま
+                    fetched_urls_list.append(cleaned_url) 
                     logger.debug(f"新規画像URLを追加: {cleaned_url} ({len(unique_image_urls)}/{max_images})")
                     if len(unique_image_urls) >= max_images:
                         break # 最大数に達したら内部ループも抜ける

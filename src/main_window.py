@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QProgressBar,
     QScrollArea, QGridLayout, QCheckBox, QMessageBox,
     QTextEdit, QGroupBox, QStatusBar, QSizePolicy, QFrame,
-    QApplication, QSpacerItem, QTabWidget, QToolButton, QStyle
+    QApplication, QSpacerItem, QTabWidget, QToolButton, QButtonGroup, QRadioButton, QStyle
 )
 from PyQt6.QtCore import Qt, QSize, QThreadPool, QRunnable, pyqtSignal, QObject, pyqtSlot, QMargins
 from PyQt6.QtGui import QPixmap, QImage, QIcon, QFont, QColor, QPalette, QCursor, QGuiApplication, QPainter, QBrush, QPen, QLinearGradient, QGradient
@@ -295,17 +295,39 @@ class MainWindow(QMainWindow):
         hpb_layout.addWidget(hpb_label)
         hpb_layout.addWidget(self.hpb_url_input, 1)
         hpb_layout.addWidget(self.salon_name_label)
-        url_layout.addLayout(hpb_layout)
         
-        # GBP URL入力
+        main_layout.addLayout(hpb_layout)
+
+        # --- Fetch Order Options (Radio Buttons) ---
+        order_layout = QHBoxLayout()
+        order_group_box = QGroupBox("画像取得順序")
+        order_group_layout = QHBoxLayout(order_group_box)
+        
+        self.order_group = QButtonGroup(self)
+        self.order_forward_radio = QRadioButton("最初のページから取得")
+        self.order_backward_radio = QRadioButton("最後のページから取得")
+        self.order_backward_radio.setChecked(True) # デフォルトは最後から
+        
+        self.order_group.addButton(self.order_forward_radio, 0) # ID 0 for forward
+        self.order_group.addButton(self.order_backward_radio, 1) # ID 1 for backward
+        
+        order_group_layout.addWidget(self.order_forward_radio)
+        order_group_layout.addWidget(self.order_backward_radio)
+        order_group_layout.addStretch()
+        
+        order_layout.addWidget(order_group_box)
+        main_layout.addLayout(order_layout)
+
+        # --- GBP URL Input ---
         gbp_layout = QHBoxLayout()
         gbp_label = QLabel("GBP URL:")
         gbp_label.setMinimumWidth(80)
         gbp_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.gbp_url_input = QLineEdit()
-        self.gbp_url_input.setPlaceholderText("Google投稿画面のURL")
+        self.gbp_url_input.setPlaceholderText("https://www.google.com/")
         gbp_layout.addWidget(gbp_label)
         gbp_layout.addWidget(self.gbp_url_input, 1)
+        
         url_layout.addLayout(gbp_layout)
         
         main_layout.addWidget(url_group)
@@ -736,7 +758,16 @@ class MainWindow(QMainWindow):
             
             # Step 2: 画像URLを取得
             hpb_url = self.hpb_url_input.text().strip()
-            worker = Worker(fetch_latest_style_images, hpb_url)
+            
+            # 選択された取得順序を取得
+            if self.order_forward_radio.isChecked():
+                fetch_order = 'forward'
+            else: # backward is default
+                fetch_order = 'backward'
+            self.log_message(f"取得順序: {'最初のページから' if fetch_order == 'forward' else '最後のページから'}")
+            
+            # Worker に order 引数を渡す
+            worker = Worker(fetch_latest_style_images, hpb_url, order=fetch_order)
             worker.signals.result.connect(self.on_image_urls_fetched)
             worker.signals.error.connect(self.on_worker_error)
             worker.signals.finished.connect(lambda: self.progress_bar.setValue(60))
