@@ -786,7 +786,7 @@ class MainWindow(QMainWindow):
             worker = Worker(download_images, image_urls)
             worker.signals.result.connect(self.on_images_downloaded)
             worker.signals.error.connect(self.on_worker_error)
-            worker.signals.finished.connect(lambda: self.progress_bar.setValue(90))
+            worker.signals.finished.connect(lambda: self.progress_bar.setValue(100))
             self.threadpool.start(worker)
         else:
             self.log_message("画像URLの取得に失敗しました")
