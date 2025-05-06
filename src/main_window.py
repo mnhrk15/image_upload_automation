@@ -782,8 +782,12 @@ class MainWindow(QMainWindow):
         if image_urls and len(image_urls) > 0:
             self.log_message(f"{len(image_urls)}件の画像URLを取得しました")
             
+            # 画像ダウンロード進捗ログ用コールバック関数
+            def download_progress_callback(message):
+                self.log_message(message)
+            
             # Step 3: 画像をダウンロード
-            worker = Worker(download_images, image_urls)
+            worker = Worker(download_images, image_urls, progress_callback=download_progress_callback)
             worker.signals.result.connect(self.on_images_downloaded)
             worker.signals.error.connect(self.on_worker_error)
             worker.signals.finished.connect(lambda: self.progress_bar.setValue(100))

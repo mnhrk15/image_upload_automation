@@ -236,7 +236,7 @@ def fetch_latest_style_images(hpb_top_url: str, order: str = 'backward') -> List
     logger.info(f"合計 {len(fetched_urls_list)} 件のユニークな画像URLを取得しました。")
     return fetched_urls_list
 
-def download_images(image_urls: List[str], temp_dir: str = TEMP_DIR) -> List[str]:
+def download_images(image_urls: List[str], temp_dir: str = TEMP_DIR, progress_callback=None) -> List[str]:
     """画像URLのリストから画像をダウンロードし、保存先のパスリストを返す。"""
     logger.info(f"{len(image_urls)} 件の画像をダウンロード中...")
     downloaded_paths = []
@@ -251,6 +251,10 @@ def download_images(image_urls: List[str], temp_dir: str = TEMP_DIR) -> List[str
 
     for i, url in enumerate(image_urls):
         try:
+            # 進捗をコールバックで報告
+            if progress_callback:
+                progress_callback(f"{i+1}/{len(image_urls)}枚目の画像をダウンロード中...")
+                
             response = _make_request(url)
             if response and response.content:
                 # ファイル名を生成 (例: image_001.jpg)
@@ -266,16 +270,26 @@ def download_images(image_urls: List[str], temp_dir: str = TEMP_DIR) -> List[str
                     f.write(response.content)
                 logger.info(f"画像を保存しました ({i+1}/{len(image_urls)}): {filepath} (from {url})")
                 downloaded_paths.append(filepath)
+                
+                # ダウンロード完了を報告
+                if progress_callback:
+                    progress_callback(f"{i+1}/{len(image_urls)}枚目の画像をダウンロードしました")
             else:
                 logger.warning(f"画像のダウンロードに失敗しました (空のレスポンス): {url}")
+                # エラーをコールバックで報告
+                if progress_callback:
+                    progress_callback(f"{i+1}/{len(image_urls)}枚目の画像ダウンロードに失敗しました")
 
             # ダウンロードの間にも少し待機 (サーバー負荷軽減)
             settings = get_settings()
             delay = settings.get('download_delay_seconds', 0.5)
-            time.sleep(delay / 2) # リクエスト間隔より少し短く
+            time.sleep(delay / 2)
 
         except Exception as e:
             logger.error(f"画像のダウンロード/保存中にエラー: {url} - {e}", exc_info=True)
+            # エラーをコールバックで報告
+            if progress_callback:
+                progress_callback(f"{i+1}/{len(image_urls)}枚目の画像処理中にエラーが発生しました: {str(e)}")
 
     logger.info(f"合計 {len(downloaded_paths)} 件の画像をダウンロードしました。")
     return downloaded_paths
